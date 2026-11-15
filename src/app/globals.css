@@ -797,6 +797,25 @@ button:disabled { cursor: default; }
   width: 76%;
   height: 76%;
 }
+/* 사진이 없는 코스 — 작은 지도 위 경로. 다 그려지면 나타나고, 누름은 카드 버튼으로 통과 */
+[data-gubi-results] .gb-card-map {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+[data-gubi-results] .gb-card-map[data-ready] {
+  opacity: 1;
+}
+.gb-card-map-start {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border: 3px solid #f4f3ef;
+  border-radius: 50%;
+  background: #101113;
+}
 [data-gubi-results] .gb-card-body {
   display: flex;
   flex: 1 1 auto;

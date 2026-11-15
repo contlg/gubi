@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { FirstRoadview, usePhotoSpots } from "@/components/RoadviewStrip";
+import { FirstRoadview, type RoadviewPoint, usePhotoSpots } from "@/components/RoadviewStrip";
+import { loadKakaoSdk } from "@/lib/kakao-sdk";
 import { distanceM } from "@/lib/scoring/curvature";
 import type { DriveStyle, LatLng } from "@/lib/types";
 
@@ -85,6 +86,66 @@ export function RouteShape({ path, className }: { path: LatLng[]; className?: st
   );
 }
 
+/**
+ * 사진 대신 쓰는 작은 지도 — 카카오 일반 지도 위에 코스 경로를 그린다. 카드 전체가 버튼이라
+ * 지도는 손으로 움직이지 않게(끌기·확대 끔, 누름은 카드로 통과) 두고, 경로 전체가 보이게 맞춘다.
+ */
+function CardMiniMap({ path, pathKey }: { path: LatLng[]; pathKey: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    if (path.length < 2) return;
+    let cancelled = false;
+    loadKakaoSdk()
+      .then(() => {
+        const k = window.kakao?.maps;
+        const el = ref.current;
+        if (cancelled || !k || !el) return;
+        el.innerHTML = "";
+        const step = Math.max(1, Math.floor(path.length / 400));
+        const pts = path
+          .filter((_, i) => i % step === 0 || i === path.length - 1)
+          .map((p) => new k.LatLng(p.lat, p.lng));
+        const map = new k.Map(el, {
+          center: pts[0],
+          level: 9,
+          draggable: false,
+          scrollwheel: false,
+          disableDoubleClick: true,
+          disableDoubleClickZoom: true,
+          keyboardShortcuts: false,
+        });
+        map.setZoomable(false);
+        const bounds = new k.LatLngBounds();
+        pts.forEach((p: unknown) => bounds.extend(p));
+        map.setBounds(bounds, 28, 28, 28, 28);
+        new k.Polyline({ map, path: pts, strokeColor: "#101113", strokeWeight: 8, strokeOpacity: 0.55, strokeStyle: "solid" });
+        new k.Polyline({ map, path: pts, strokeColor: "#f5c542", strokeWeight: 5, strokeOpacity: 1, strokeStyle: "solid" });
+        const dot = document.createElement("span");
+        dot.className = "gb-card-map-start";
+        new k.CustomOverlay({ map, position: pts[0], content: dot, xAnchor: 0.5, yAnchor: 0.5, zIndex: 3 });
+        setReady(true);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // 경로 배열은 그릴 때마다 새로 만들어지므로 코스 키로만 다시 그린다
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathKey]);
+  return <div ref={ref} className="gb-card-map" aria-hidden="true" data-ready={ready ? "1" : undefined} />;
+}
+
+/**
+ * 카드 큰 사진으로 써도 되는 지점인가 — 강변·해안처럼 "물이 보여야" 하는 지점은 서버가 물이 트였다고
+ * 확인한 것(water)만 쓴다. 확인 안 된 물가 지점은 나무·풀숲만 찍히는 일이 많아(2026-11-15 차량 확인)
+ * 사진 대신 지도 위 경로를 보여 준다.
+ */
+const WATER_SPOT = /강변|해안|바다|바닷|호수|호반|저수지|해변|물가/;
+function photoTrusted(sp: RoadviewPoint): boolean {
+  return sp.water === true || !WATER_SPOT.test(sp.name ?? "");
+}
+
 /** 앞 카드가 이미 쓴 지점에서 이만큼 안이면 같은 풍경으로 본다 */
 const SAME_SPOT_M = 1000;
 
@@ -95,11 +156,16 @@ const SAME_SPOT_M = 1000;
 function CoursePhoto({ item, taken, onShow }: { item: CourseCardItem; taken: LatLng[]; onShow: (p: LatLng) => void }) {
   const spots = usePhotoSpots(item.path, item.photoStyles, item.photoKey);
   const [none, setNone] = useState("");
-  const usable = (spots ?? []).filter((sp) => taken.every((t) => distanceM(t, sp.coord) > SAME_SPOT_M));
+  const usable = (spots ?? []).filter(
+    (sp) => photoTrusted(sp) && taken.every((t) => distanceM(t, sp.coord) > SAME_SPOT_M),
+  );
   const key = usable.map((p) => `${p.coord.lat},${p.coord.lng}`).join("|");
+  // 로드뷰를 못 쓰는 코스(지점 없음·모두 실패)는 작은 지도 위에 경로를 그린다
+  const showMap = spots !== null && !(usable.length > 0 && none !== key);
   return (
     <div className="gb-card-photo">
       <RouteShape path={item.path} className="gb-card-shape" />
+      {showMap && <CardMiniMap path={item.path} pathKey={item.photoKey} />}
       {usable.length > 0 && none !== key && (
         <FirstRoadview
           key={key}
