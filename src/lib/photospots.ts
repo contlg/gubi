@@ -5,8 +5,6 @@ import { join } from "node:path";
 
 import { elevationAt } from "@/lib/elevation";
 import { fastestRoadKmhNear, junctionCountNear } from "@/lib/localroute";
-import { getPrefetchedPoints } from "@/lib/osm";
-import { allRiversideSegments } from "@/lib/winding";
 import { curvatureSegments, distanceM } from "@/lib/scoring/curvature";
 import type { DriveStyle, LatLng } from "@/lib/types";
 
@@ -15,6 +13,8 @@ export interface PhotoSpot {
   coord: LatLng;
   /** 로드뷰 초기 시선 방향(도, 북=0) — 물 쪽. 없으면 도로 진행 방향 기본 */
   pan?: number;
+  /** 물(바다·강) 지점 — 시선 검증된 도로점이라 로드뷰도 그 자리(30m)에서만 찾는다 */
+  water?: boolean;
 }
 
 /** 이 반경 안 실교차로가 이 수 이상이면 도시/마을 — 촬영 제외 */
@@ -22,8 +22,6 @@ const URBAN_RADIUS_M = 250;
 const URBAN_JUNCTIONS = 3;
 /** 후보끼리 최소 간격 — 같은 풍경 두 장 방지 */
 const DIVERSITY_M = 3000;
-
-const STEP_M = 500;
 
 const WINDING_MIN_DEG = 80;
 
@@ -85,107 +83,73 @@ function nearTunnel(p: LatLng, radiusM = 150): boolean {
 }
 
 /**
- * 강·호수·저수지 물 경계점 색인 (scripts/build-water-edges-from-osm.mjs 산출물).
- * 강 중심선만으로는 "한강처럼 넓어 물가는 가까운 곳"과 "숲·건물 너머 강"을 못 갈랐다
- * (2026-11-13 실측: 물가 49~102m는 로드뷰에 물이 보였고 166m 이상은 숲·건물에 가렸다).
+ * 물이 "실제로 보이는" 도로점 색인 (scripts/build-view-points-from-osm.mjs 산출물).
+ * 항목 [lat, lng, pan, kind(0 바다·1 강/호수), openM(열린 물 길이), fgM(도로→물가 전경)].
+ * 해안선까지 거리만 보고 고른 지점은 방음벽·숲·항만·아파트·나란한 큰길·둑에 가려
+ * 물이 안 보였다(2026-11-14 실측) — 이제 지도 기하로 시선이 물까지 트인 점만 쓴다.
  */
-const WATER_FILE = join(process.cwd(), "src/lib/data/water-edge-points.json");
-const WCELL = 0.002; // ~220m 격자
-let waterGrid: Map<number, [number, number, number][]> | null = null;
-function loadWaterGrid(): Map<number, [number, number, number][]> {
-  if (waterGrid) return waterGrid;
-  waterGrid = new Map();
+const VIEW_FILE = join(process.cwd(), "src/lib/data/view-points.json");
+const VCELL = 0.002; // ~220m 격자 (산출물을 다시 만들면 이 모듈을 다시 읽어야 반영 — 모듈 캐시)
+type ViewPoint = [number, number, number, number, number, number];
+let viewGrid: Map<number, ViewPoint[]> | null = null;
+function loadViewGrid(): Map<number, ViewPoint[]> {
+  if (viewGrid) return viewGrid;
+  viewGrid = new Map();
   try {
-    const arr = JSON.parse(readFileSync(WATER_FILE, "utf8")) as [number, number, number][];
-    for (const [lat, lng, kind] of arr) {
-      const k = Math.floor(lat / WCELL) * 1_000_000 + Math.floor(lng / WCELL);
-      const cell = waterGrid.get(k);
-      if (cell) cell.push([lat, lng, kind]);
-      else waterGrid.set(k, [[lat, lng, kind]]);
+    const arr = JSON.parse(readFileSync(VIEW_FILE, "utf8")) as ViewPoint[];
+    for (const v of arr) {
+      const k = Math.floor(v[0] / VCELL) * 1_000_000 + Math.floor(v[1] / VCELL);
+      const cell = viewGrid.get(k);
+      if (cell) cell.push(v);
+      else viewGrid.set(k, [v]);
     }
   } catch {
-    // 데이터 없으면 물가 지점 없이 동작
+    // 데이터 없으면 물 지점 없음 — 검증 안 된 지점으로 채우지 않는다
   }
-  return waterGrid;
-}
-
-/** 가장 가까운 물가(경계점) — 거리·방위·종류(0 강, 1 호수·저수지). 반경 밖이면 null */
-function nearestWater(p: LatLng): { d: number; brg: number; kind: number } | null {
-  const g = loadWaterGrid();
-  if (g.size === 0) return null;
-  const ci = Math.floor(p.lat / WCELL);
-  const cj = Math.floor(p.lng / WCELL);
-  let best: { d: number; at: LatLng; kind: number } | null = null;
-  for (let a = ci - 1; a <= ci + 1; a++) {
-    for (let b = cj - 1; b <= cj + 1; b++) {
-      const cell = g.get(a * 1_000_000 + b);
-      if (!cell) continue;
-      for (const [lat, lng, kind] of cell) {
-        const d = distanceM(p, { lat, lng });
-        if (!best || d < best.d) best = { d, at: { lat, lng }, kind };
-      }
-    }
-  }
-  return best ? { d: best.d, brg: bearingDeg(p, best.at), kind: best.kind } : null;
+  return viewGrid;
 }
 
 /**
- * 다리 위인가 — 도로 왼쪽과 오른쪽 모두 가까이(150m)에 물가가 있으면 물을 건너는 중이다.
- * 다리는 물가 거리가 가장 짧아 맨 먼저 뽑혔고, 로드뷰엔 난간·차선만 보였다(2026-11-13 실측).
+ * 경로에서 이 거리 안 시선 검증 점만 — 코스가 실제로 달리는 그 길 위 점이어야 한다.
+ * 30m로는 강화 초지진에서 해안동로 옆 샛길(서비스 도로) 점이 뽑혀 나무·갯벌이 찍혔다(2026-11-14).
+ * 왕복 분리 차로(대부황금로 반대 차로 12~14m)는 들어오게 15m.
  */
-function overWater(p: LatLng, roadBrg: number): boolean {
-  const g = loadWaterGrid();
-  if (g.size === 0) return false;
-  const ci = Math.floor(p.lat / WCELL);
-  const cj = Math.floor(p.lng / WCELL);
-  let left = false;
-  let right = false;
-  for (let a = ci - 1; a <= ci + 1; a++) {
-    for (let b = cj - 1; b <= cj + 1; b++) {
-      for (const [lat, lng] of g.get(a * 1_000_000 + b) ?? []) {
-        const q = { lat, lng };
-        if (distanceM(p, q) > 150) continue;
-        const rel = (bearingDeg(p, q) - roadBrg + 360) % 360;
-        if (rel > 30 && rel < 150) right = true;
-        else if (rel > 210 && rel < 330) left = true;
-        if (left && right) return true;
-      }
+const VIEW_ROUTE_M = 15;
+/** 경로 촘촘 샘플 간격 — VIEW_ROUTE_M보다 충분히 작게 */
+const VIEW_STEP_M = 5;
+
+/** 경로를 따라 시선 검증 점을 모은다 (중복 제거) */
+function viewPointsAlong(path: LatLng[]): ViewPoint[] {
+  const g = loadViewGrid();
+  if (g.size === 0) return [];
+  const found = new Set<ViewPoint>();
+  const visit = (p: LatLng) => {
+    const ci = Math.floor(p.lat / VCELL);
+    const cj = Math.floor(p.lng / VCELL);
+    for (let a = ci - 1; a <= ci + 1; a++)
+      for (let b = cj - 1; b <= cj + 1; b++)
+        for (const v of g.get(a * 1_000_000 + b) ?? [])
+          if (!found.has(v) && distanceM(p, { lat: v[0], lng: v[1] }) <= VIEW_ROUTE_M) found.add(v);
+  };
+  // 경로 꼭짓점 사이를 VIEW_STEP_M로 보간 — 꼭짓점이 듬성한 직선 구간도 빠짐없이
+  for (let i = 0; i < path.length; i++) {
+    visit(path[i]);
+    if (i === 0) continue;
+    const d = distanceM(path[i - 1], path[i]);
+    const n = Math.floor(d / VIEW_STEP_M);
+    for (let k = 1; k < n; k++) {
+      const t = k / n;
+      visit({
+        lat: path[i - 1].lat + (path[i].lat - path[i - 1].lat) * t,
+        lng: path[i - 1].lng + (path[i].lng - path[i - 1].lng) * t,
+      });
     }
   }
-  return false;
+  return [...found];
 }
 
-/**
- * 물 쪽 방향 — 300m 안 물가점을 도로 왼쪽·오른쪽으로 나눠 더 많은 쪽(큰 물)의 평균 방위.
- * 가장 가까운 점 하나만 보면 반대편 작은 수로·웅덩이를 봤다(2026-11-13 실측).
- */
-function waterSidePan(p: LatLng, roadBrg: number): number | undefined {
-  const g = loadWaterGrid();
-  const ci = Math.floor(p.lat / WCELL);
-  const cj = Math.floor(p.lng / WCELL);
-  const side = { left: [0, 0, 0], right: [0, 0, 0] }; // [개수, sin합, cos합]
-  for (let a = ci - 2; a <= ci + 2; a++) {
-    for (let b = cj - 2; b <= cj + 2; b++) {
-      for (const [lat, lng] of g.get(a * 1_000_000 + b) ?? []) {
-        const q = { lat, lng };
-        if (distanceM(p, q) > 300) continue;
-        const brg = bearingDeg(p, q);
-        const rel = (brg - roadBrg + 360) % 360;
-        const s = rel > 0 && rel < 180 ? side.right : rel > 180 ? side.left : null;
-        if (!s) continue;
-        s[0]++;
-        s[1] += Math.sin((brg * Math.PI) / 180);
-        s[2] += Math.cos((brg * Math.PI) / 180);
-      }
-    }
-  }
-  const s = side.left[0] >= side.right[0] ? side.left : side.right;
-  if (s[0] === 0) return undefined;
-  return ((Math.atan2(s[1], s[2]) * 180) / Math.PI + 360) % 360;
-}
-
-/** 로드뷰에 물이 실제로 보이는 도로-물가 거리 상한 (위 실측 근거) */
-const WATER_VISIBLE_M = 120;
+/** 정렬 키 — 전경 짧을수록, 열린 물 길수록 좋다(열린 물 20m 차이 ≈ 전경 1m) */
+const viewRank = (v: ViewPoint) => v[5] + (1500 - Math.min(v[4], 1500)) / 20;
 
 /**
  * 촬영지 공통 결격 — 도시/마을(건물), 터널 안·위, 방음벽 낀 간선·전용도로
@@ -200,18 +164,11 @@ function badSpot(p: LatLng): boolean {
   return false;
 }
 
-/** 경로를 ~stepM 간격으로 샘플 (인덱스 유지용으로 좌표만) */
-function samplePts(path: LatLng[], stepM: number): LatLng[] {
-  const out: LatLng[] = [];
-  let acc = stepM;
-  for (let i = 0; i < path.length; i++) {
-    if (i > 0) acc += distanceM(path[i - 1], path[i]);
-    if (acc >= stepM || i === 0) {
-      acc = 0;
-      out.push(path[i]);
-    }
-  }
-  return out;
+/** 물 지점 결격 — 터널 안·위, 방음벽 낀 80km/h급 간선 옆. 가림은 산출 때 기하로 봤다 */
+function badWaterSpot(p: LatLng): boolean {
+  if (nearTunnel(p)) return true;
+  const kmh = fastestRoadKmhNear(p, 150);
+  return kmh !== null && kmh >= 80;
 }
 
 interface Scored extends PhotoSpot {
@@ -220,84 +177,27 @@ interface Scored extends PhotoSpot {
 
 /** 스타일 무관 후보 수집 — 종류별로 뽑고 스타일이 우선순위를 정한다 */
 function collect(path: LatLng[]): Record<"coast" | "river" | "winding", Scored[]> {
-  const pts = samplePts(path, STEP_M);
-
-  //    벽·먼바다·나무 가림이 없다 (유저: "바다가 너무 멀리 보이고 벽에 막힘").
-  //    d 오름차순으로 훑으며 3km 간격으로 뽑는다.
-  const allShore = getPrefetchedPoints().filter((c) => c.d <= 250);
-  const coastCand: { i: number; d: number; shore: LatLng }[] = [];
-  for (let i = 0; i < pts.length; i++) {
-    // 성긴 사전 필터(위도 ~0.005 ≈ 550m) 후 정밀 거리, 최근접 해안 정점
-    let best = Infinity;
-    let bestShore: LatLng | null = null;
-    for (const c of allShore) {
-      if (
-        Math.abs(c.lat - pts[i].lat) < 0.005 &&
-        Math.abs(c.lng - pts[i].lng) < 0.007 &&
-        distanceM(pts[i], c) < 100 &&
-        c.d < best
-      ) {
-        best = c.d;
-        bestShore = { lat: c.lat, lng: c.lng };
-      }
+  // 해안·강변: 시선 검증 점(view-points.json) 중 경로 30m 안인 것만. 방향(pan)도 그 점의 것 —
+  // 도로→물가 전경이 짧고 가림(건물·벽·숲·항만·큰길·갯벌·지형)이 없고 물이 넓게 열린 방향이다.
+  // 도시 판정(교차로 수)은 쓰지 않는다 — 기하로 이미 가림을 봤고, 송도 해변길처럼 시내여도
+  // 바다가 트인 곳이 있다. 다리 판정(overWater)도 뺀다 — 산출 때 다리를 제외했고, 방조제처럼
+  // 양쪽이 물인 길은 오히려 좋은 지점이다. 터널·고속 간선(방음벽) 결격만 남긴다.
+  const views = viewPointsAlong(path)
+    .filter((v) => !badWaterSpot({ lat: v[0], lng: v[1] }))
+    .sort((a, b) => viewRank(a) - viewRank(b));
+  const pick = (kind: number, name: string, score: number): Scored[] => {
+    const out: Scored[] = [];
+    for (const v of views) {
+      if (v[3] !== kind) continue;
+      const coord = { lat: v[0], lng: v[1] };
+      if (out.every((q) => distanceM(q.coord, coord) > DIVERSITY_M))
+        out.push({ name, coord, pan: v[2], water: true, score });
+      if (out.length >= 3) break;
     }
-    if (best < Infinity && bestShore && !badSpot(pts[i]))
-      coastCand.push({ i, d: best, shore: bestShore });
-  }
-  coastCand.sort((a, b) => a.d - b.d);
-  const coast: Scored[] = [];
-  for (const cand of coastCand) {
-    const i = cand.i;
-    if (coast.every((q) => distanceM(q.coord, pts[i]) > DIVERSITY_M)) {
-      coast.push({
-        name: "바닷가 구간",
-        coord: pts[i],
-        // 최근접 해안 정점을 정확히 바라본다 (좌우 추정보다 정확 — 바다를 봄)
-        pan: bearingDeg(pts[i], cand.shore),
-        score: 100,
-      });
-    }
-    if (coast.length >= 3) break;
-  }
-
-  // 강변: 강변길 재고(고속도로·시내 제외된 강변 도로) 위이면서 물가가 정말 바로 옆(120m 안)이고
-  // 다리 위가 아닌 지점만, 물가에 가까운 순으로. 방향은 가장 가까운 물가를 정확히 바라본다
-  // (예전 좌우 추정은 식당·주차장을 봤고, 재고만 쓰면 숲 너머 강을 골랐다 — 2026-11-13 실측).
-  const riverSegPts: LatLng[] = [];
-  for (const seg of allRiversideSegments())
-    for (let k = 0; k < seg.pts.length; k += 3)
-      riverSegPts.push({ lat: seg.pts[k][0], lng: seg.pts[k][1] });
-  const fine = samplePts(path, 200);
-  const waterCand: { p: LatLng; d: number; brg: number; kind: number }[] = [];
-  for (let i = 0; i < fine.length; i++) {
-    const p = fine[i];
-    // 80m — 200m로 잡으면 강 건너편 대로(방음벽·트럭)가 강변길로 매칭된다
-    const onRiverside = riverSegPts.some(
-      (c) =>
-        Math.abs(c.lat - p.lat) < 0.003 &&
-        Math.abs(c.lng - p.lng) < 0.004 &&
-        distanceM(p, c) < 80,
-    );
-    if (!onRiverside) continue;
-    const w = nearestWater(p);
-    if (!w || w.d > WATER_VISIBLE_M || badSpot(p)) continue;
-    const brg = bearingDeg(fine[Math.max(0, i - 1)], fine[Math.min(fine.length - 1, i + 1)]);
-    if (overWater(p, brg)) continue;
-    waterCand.push({ p, ...w, brg: waterSidePan(p, brg) ?? w.brg });
-  }
-  waterCand.sort((a, b) => a.d - b.d);
-  const river: Scored[] = [];
-  for (const c of waterCand) {
-    if (river.every((q) => distanceM(q.coord, c.p) > DIVERSITY_M)) {
-      river.push({
-        name: "강변 구간",
-        coord: c.p,
-        pan: c.brg,
-        score: 90,
-      });
-    }
-    if (river.length >= 3) break;
-  }
+    return out;
+  };
+  const coast = pick(0, "바닷가 구간", 100);
+  const river = pick(1, "강변 구간", 90);
 
   const winding: Scored[] = curvatureSegments(path)
     .filter((s) => s.degPerKm >= WINDING_MIN_DEG && s.path.length > 1)
@@ -335,16 +235,15 @@ export function photoSpots(path: LatLng[], styles: DriveStyle[] = []): PhotoSpot
     (styles.includes("해안도로") || styles.includes("강변도로")) &&
     !styles.some((s) => s === "와인딩" || s === "산길" || s === "직선도로");
   if (waterOnly) {
+    // 고른 물 종류만 — 해안 코스에 강 사진("근덕면 강변")이 뜨던 문제(2026-11-15). 없으면 비운다.
     const water = [
       ...(styles.includes("해안도로") ? c.coast : []),
       ...(styles.includes("강변도로") ? c.river : []),
-      ...c.coast,
-      ...c.river,
     ];
     const outW: PhotoSpot[] = [];
     for (const p of water) {
       if (outW.every((q) => distanceM(q.coord, p.coord) > DIVERSITY_M))
-        outW.push({ name: p.name, coord: p.coord, pan: p.pan });
+        outW.push({ name: p.name, coord: p.coord, pan: p.pan, water: p.water });
       if (outW.length >= 2) break;
     }
     return outW;
@@ -365,7 +264,7 @@ export function photoSpots(path: LatLng[], styles: DriveStyle[] = []): PhotoSpot
   const out: PhotoSpot[] = [];
   for (const p of ordered) {
     if (out.every((q) => distanceM(q.coord, p.coord) > DIVERSITY_M))
-      out.push({ name: p.name, coord: p.coord, pan: p.pan });
+      out.push({ name: p.name, coord: p.coord, pan: p.pan, water: p.water });
     if (out.length >= 2) break;
   }
   // 볼 풍경이 없으면 빈 배열 — 코스 아무 지점(도로·절개지)을 채워 넣지 않는다(2026-11-13).

@@ -1,23 +1,22 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { PleosCourseEstimate } from "@/components/PleosInfo";
 import { BORROW_SERVER, withBasePath } from "@/lib/borrow-mode";
+import CourseCards, { BigDuration, BigKm } from "@/components/CourseCards";
 import CourseDetails from "@/components/CourseDetails";
 import PoiCard from "@/components/PoiCard";
-import RoadviewStrip from "@/components/RoadviewStrip";
+import { FirstRoadview, usePhotoSpots } from "@/components/RoadviewStrip";
 import StyleHighlights from "@/components/StyleHighlights";
 import RouteMapOSM from "@/components/RouteMapOSM";
 import {
-  IconChevronRight,
   IconClose,
   IconCompass,
   IconLoop,
   IconMap,
   IconPin,
-  IconSearch,
   IconTarget,
   IconWheel,
 } from "@/components/icons";
@@ -35,6 +34,7 @@ import type { DrivePlanHandoff } from "@/lib/drive-plan";
 import { secureDepsFor, writeSecureJson } from "@/lib/secure-store";
 import { encodePolyline } from "@/lib/polyline";
 import { cleanLabel } from "@/lib/display-text";
+import { cutRanges, specialKindsFor } from "@/lib/special-segments";
 import { buildReason } from "@/lib/reason";
 import { distanceM } from "@/lib/scoring/curvature";
 import MapPicker from "@/components/MapPicker";
@@ -48,6 +48,7 @@ import {
   type CoastIntensity,
   type ConditionAdjustments,
   type DriveStyle,
+  type LatLng,
   type Place,
   type RouteCandidate,
   type RouteMetrics,
@@ -254,16 +255,15 @@ function PlaceInput({
   }, [value, selectedName]);
 
   return (
-    <div data-place-input data-place-actions={Number(!!onLocate) + Number(!!onMapPick)} className="relative flex-1">
+    <div data-place-field className="gb-field">
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onBlur={() => setTimeout(() => setOpen(false), 150)}
         onFocus={() => options.length > 0 && setOpen(true)}
         placeholder={placeholder}
-        className={`w-full rounded-md border border-line bg-raised px-4 py-3 text-sm text-primary outline-none transition-colors placeholder:text-secondary focus:border-line focus:ring-2 focus:ring-line ${
-          onLocate && onMapPick ? "pr-[4.5rem]" : onLocate || onMapPick ? "pr-10" : ""
-        }`}
+        aria-label={placeholder}
+        className="gb-input"
       />
       {onMapPick && (
         <button
@@ -272,9 +272,9 @@ function PlaceInput({
           title="지도에서 선택"
           aria-label="지도에서 선택"
           data-place-map
-          className={`absolute top-1/2 -translate-y-1/2 rounded-sm p-2 text-[15px] leading-none text-secondary transition-colors hover:bg-raised hover:text-primary ${onLocate ? "right-9" : "right-2"}`}
+          className="gb-field-icon"
         >
-          <IconMap size={16} />
+          <IconMap size={24} />
         </button>
       )}
       {onLocate && (
@@ -285,13 +285,13 @@ function PlaceInput({
           title="현재 위치 사용"
           aria-label="현재 위치 사용"
           data-place-locate
-          className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-2 text-secondary transition-colors hover:bg-raised hover:text-primary disabled:opacity-40"
+          className="gb-field-icon"
         >
-          <IconTarget className={`h-4 w-4 ${locating ? "animate-spin" : ""}`} />
+          <IconTarget className={locating ? "animate-spin" : undefined} />
         </button>
       )}
       {open && (
-        <ul className="absolute z-20 mt-2 max-h-64 w-full overflow-auto rounded-md border border-line bg-panel">
+        <ul className="absolute left-0 top-full z-20 mt-2 max-h-64 w-full overflow-auto rounded-md border border-line bg-panel">
           {options.map((p) => (
             <li key={`${p.name}|${p.address}`}>
               <button
@@ -414,6 +414,10 @@ export function Planner({
   const [conditions, setConditions] = useState<Conditions | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [resultsOpen, setResultsOpen] = useState(false);
+  /** 결과 화면 — 코스 카드 3장(list) / 한 코스 지도·설명(detail) */
+  const [resultView, setResultView] = useState<"list" | "detail">("list");
+  /** 이 결과를 찾을 때 고른 길 종류 — 화면 조건이 바뀌어도 결과 설명은 검색 때 기준 */
+  const [searchedStyles, setSearchedStyles] = useState<DriveStyle[]>([]);
   const [trafficCache, setTrafficCache] = useState<
     Record<
       string,
@@ -436,7 +440,10 @@ export function Planner({
   /** 선택 코스 주변 별점순 추천 — 지도에 핀으로 표시 */
   const [courseSpots, setCourseSpots] = useState<NearbyPlace[] | null>(null);
   const [courseSpotsIdentity, setCourseSpotsIdentity] = useState("");
-  const [resultMapMode, setResultMapMode] = useState<"traffic" | "winding" | "coast">("traffic");
+  /** 지도 위 로드뷰 카드가 실제로 보여 주는 지점(로드뷰가 뜬 곳) — 선으로 잇는 끝 */
+  const [shownSpot, setShownSpot] = useState<{ key: string; coord: LatLng } | null>(null);
+  /** "이 코스 주변 추천 명소"를 펼쳤는지 — 펼쳤을 때만 지도에 명소 핀 */
+  const [spotsOpenKey, setSpotsOpenKey] = useState("");
   const [courseSpotsLoading, setCourseSpotsLoading] = useState(false);
   // 서버/네트워크 오류를 "추천할 곳 없음"과 구분한다 — 오류는 재시도 안내로 표시
   const [courseSpotsError, setCourseSpotsError] = useState(false);
@@ -486,6 +493,10 @@ export function Planner({
   const locationRequest = useRef(0);
   const locationAbort = useRef<AbortController | null>(null);
   const resultsDialogRef = useRef<HTMLDivElement>(null);
+  const resultViewRef = useRef(resultView);
+  useEffect(() => {
+    resultViewRef.current = resultView;
+  }, [resultView]);
 
   useEffect(
     () => () => {
@@ -554,6 +565,7 @@ export function Planner({
   });
 
   const isLoopResult = resolved !== null && resolved.to === null;
+  const resultStyles = searchedStyles;
   const budgetSec = searchedBudgetH * 3600;
 
   // 정체 버킷 — '덜 막히는 길 우선' 정렬용. 실시간 정체(jamRatio)가 있는 후보만
@@ -575,7 +587,7 @@ export function Planner({
     if (t <= budgetSec + BUDGET_TOLERANCE_SEC) return 1;
     return 2;
   };
-  const scored = isLoopResult
+  const ranked = isLoopResult
     ? [...scoredRaw].sort(
         (a, b) =>
           budgetBucket(a) - budgetBucket(b) ||
@@ -585,6 +597,16 @@ export function Planner({
     : avoidJam
       ? [...scoredRaw].sort((a, b) => jamBucket(a) - jamBucket(b))
       : scoredRaw;
+  // 여러 종류를 골랐으면 앞쪽 카드에 고른 종류마다 하나씩(각 종류의 1등) — 와인딩·해안·강변을
+  // 골랐는데 해안·해안·와인딩이 앞을 채우고 강변이 뒤로 밀리던 문제(2026-11-15). 나머지는 원래 순서.
+  const scored = (() => {
+    if (resultStyles.length < 2) return ranked;
+    const firsts = new Set(
+      resultStyles.map((s) => ranked.find((c) => c.styleTag === s)).filter((c): c is (typeof ranked)[number] => !!c),
+    );
+    if (firsts.size < 2) return ranked;
+    return [...ranked.filter((c) => firsts.has(c)), ...ranked.filter((c) => !firsts.has(c))];
+  })();
 
   // 이 결과가 어떤 검색으로 나온 건지 — 결과 팝업·다시보기 버튼에 표시해 화면의
   // 현재 조건과 헷갈리지 않게 한다.
@@ -627,11 +649,36 @@ export function Planner({
   const visibleNearby = nearbyRouteKey === nearbyIdentity ? nearby : null;
   const visibleNearbyLoading = nearbyRouteKey === nearbyIdentity && nearbyLoading;
   const visiblePickedPoi = pickedPoi?.identity === poiIdentity ? pickedPoi.place : null;
-  const hasTraffic = !!trafficCache[selectedPathKey]?.samples.length;
-  const hasWinding = !!selectedCandidate && selectedCandidate.path.length >= 2 && Number.isFinite(selectedCandidate.curve.degPerKm);
-  const hasCoast = !!selectedCandidate?.metrics?.coast.length;
-  const effectiveMapMode = (resultMapMode === "coast" && !hasCoast) || (resultMapMode === "winding" && !hasWinding)
-    ? "traffic" : resultMapMode;
+  // 코스 상세 지도 — 고른 길 종류의 특별 구간(서버가 잰 거리 구간)을 경로 조각으로
+  const selectedSpecialRanges = selectedCandidate?.metrics?.special;
+  const selectedSpecialKinds = specialKindsFor(resultStyles).join(",");
+  const selectedSpecial = useMemo(() => {
+    if (!selectedCandidate || !selectedSpecialRanges) return [];
+    return (selectedSpecialKinds ? (selectedSpecialKinds.split(",") as ReturnType<typeof specialKindsFor>) : []).flatMap(
+      (kind) => cutRanges(selectedCandidate.path, selectedSpecialRanges[kind] ?? []).map((seg) => ({ kind, ...seg })),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPathKey, selectedSpecialRanges, selectedSpecialKinds]);
+  // 경유지 말풍선 — 사용자가 넣은 곳과 실제 장소(주소가 있는 곳)만. 루프가 자동으로 박은
+  // 도로 이름 점("상지로")·해안 보조점은 말풍선을 달지 않는다. 같은 이름은 한 번만
+  const selectedStops = useMemo(() => {
+    const seen = new Set<string>();
+    const mine = new Set(pinned.map((p) => p.name));
+    return (selectedCandidate?.waypoints ?? []).filter((w) => {
+      if (/^해안\d+$/.test(w.name) || seen.has(w.name)) return false;
+      if (!w.address?.trim() && !mine.has(w.name)) return false;
+      seen.add(w.name);
+      return true;
+    }).map((w) => ({ name: w.name, coord: w.coord }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPathKey, selectedCandidate?.waypoints, pinned]);
+  // 지도 위 로드뷰 카드 — 카드 목록과 같은 지점·같은 캐시
+  const selectedSpots = usePhotoSpots(
+    selectedCandidate?.path ?? [],
+    // 코스 자기 종류(강변 코스면 강변) 기준 — 고른 취향 전체로 고르면 강변 코스에 와인딩 사진이 떴다(2026-11-15)
+    selectedCandidate?.styleTag ? [selectedCandidate.styleTag] : resultStyles,
+    selectedCandidate ? `${selectedCandidate.label}|${selectedPathKey}` : "",
+  );
 
   useEffect(() => {
     setPickedPoi(null);
@@ -775,7 +822,9 @@ export function Planner({
     focusFirst();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        setResultsOpen(false);
+        // 상세에서는 카드 목록으로, 목록에서는 결과를 닫는다
+        if (resultViewRef.current === "detail") setResultView("list");
+        else setResultsOpen(false);
         return;
       }
       if (e.key !== "Tab" || !dialog) return;
@@ -1046,6 +1095,8 @@ export function Planner({
     const destQ = over.destQuery ?? destination;
     if (over.budgetH !== undefined) setBudgetH(over.budgetH);
     setLoading(true);
+    setSearchedStyles(st);
+    setResultView("list");
     setError(null);
     setCandidates([]);
     setNotes([]);
@@ -1516,6 +1567,163 @@ export function Planner({
     rerouteWith(waypoints.filter((_, i) => i !== index));
   }
 
+  // 이 코스로 출발 — 코스를 주행 화면(Gubi)에 물려준다. 주행 종료 때 예상 vs 실제 비교
+  async function startDrive(c: RouteCandidate) {
+    setSelected(c.label);
+    // 코스를 Gubi에 물려준다 — 주행 종료 때 예상 vs 실제 비교
+    const planForDrive = {
+      label: c.label,
+      durationSec: c.durationSec,
+      distanceM: c.distanceM,
+      routeSource: c.routeSource,
+      path: encodePolyline(
+        c.path.map((p): [number, number] => [p.lat, p.lng]),
+      ),
+      vias: (c.waypoints ?? [])
+        .filter((w) => !/^해안\d+$/.test(w.name))
+        .slice(0, 20)
+        .map((w) => ({
+          name: w.name,
+          lat: w.coord.lat,
+          lng: w.coord.lng,
+          dwellMin: w.dwellMin ?? 0,
+        })),
+    };
+    if (onDrive) {
+      onDrive(planForDrive);
+      return;
+    }
+    if (BORROW_SERVER) {
+      // 빌려 쓰기 모드: 코스 전달함(/api/drive-plan, 서버 저장)을 쓰지 않고
+      // 같은 주소의 /log가 읽는 세션 보관함으로 넘긴다.
+      // 코스 경로가 담기므로 기기 안 열쇠로 암호화해 둔다(안 되면 평문).
+      try {
+        await writeSecureJson("drivelog-pending-plan-v1", planForDrive, secureDepsFor(sessionStorage));
+      } catch {}
+      window.location.href = withBasePath("/log");
+      return;
+    }
+    try {
+      const res = await fetch("/api/drive-plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(planForDrive),
+      });
+      const data = await res.json();
+      if (!res.ok || typeof data.id !== "string") {
+        throw new Error(data.error ?? "코스를 전달하지 못했어요");
+      }
+      const h = location.hostname;
+      const target = h.startsWith("drive.")
+        ? `${location.protocol}//drivelog.${h.slice(6)}/log`
+        : "/log";
+      window.location.href = `${target}?plan=${encodeURIComponent(data.id)}`;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "코스를 전달하지 못했어요");
+    }
+  }
+
+  // 결과 화면 알림 — 조건 바뀜·오류·날씨/해안 안내·시간 초과·전부 제외. 목록과 상세가 같이 쓴다.
+  const resultAlerts = (
+    <>
+
+        {resultsStale && (
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-warn bg-warn-surface p-3 text-xs text-warn">
+            <span>검색 조건이 바뀌었어요. 이 결과는 이전 검색이에요.</span>
+            <button
+              type="button"
+              onClick={() => {
+                setResultsOpen(false);
+                void doSearch();
+              }}
+              className="shrink-0 rounded-sm bg-warn-strong px-4 py-2 text-xs font-semibold text-warn transition-colors"
+            >
+              현재 조건으로 다시 검색
+            </button>
+          </div>
+        )}
+
+        {/* 에러는 모달 안에서도 보여야 한다 — 밖 배너는 모달에 가려짐 */}
+        {error && (
+          <div className="mt-2 flex items-start gap-3 rounded-md border border-danger bg-danger-surface p-3 text-xs text-danger dark:border-danger dark:bg-danger-surface dark:text-danger">
+
+            <span>{error}</span>
+          </div>
+        )}
+
+        {conditions && conditions.notes.length > 0 && candidates.length > 0 && (
+          <div className="mt-2 flex items-start gap-3 rounded-md border border-accent bg-accent-surface p-3 text-xs text-accent-text dark:border-accent dark:bg-accent-surface dark:text-accent-text">
+
+            <div className="space-y-1">
+              {conditions.notes.map((n) => (
+                <p key={n}>{cleanLabel(n)}</p>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {notes.length > 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-warn bg-warn-surface p-3 text-xs text-warn dark:border-warn dark:bg-warn-surface dark:text-warn">
+            <span>{notes.map((n) => cleanLabel(n)).join(" ")}</span>
+            {coastIntensity !== "max" && (
+              <button
+                type="button"
+                onClick={() => {
+                  setCoastIntensity("max");
+                  doSearch({ coast: "max" });
+                }}
+                disabled={loading}
+                className="rounded-sm bg-warn-strong px-4 py-2 text-xs font-medium text-primary transition-colors disabled:opacity-50"
+              >
+                최대 강도로 다시 검색
+              </button>
+            )}
+          </div>
+        )}
+
+        {budgetMiss && (
+          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-danger bg-danger-surface p-3 text-xs text-danger dark:border-danger dark:bg-danger-surface dark:text-danger">
+            <span>
+              {searchedBudgetH}시간 코스 없음 (가장 짧은 코스 <b>{formatDuration(minDurationSec)}</b>)
+              {pinned.length > 0 && " 필수 경유지가 멀어서 그럴 수 있어요."}
+            </span>
+            {suggestedBudgetH > searchedBudgetH && (
+              <button
+                type="button"
+                onClick={() => doSearch({ budgetH: suggestedBudgetH })}
+                disabled={loading}
+                className="rounded-sm bg-danger-strong px-4 py-2 text-xs font-medium text-primary transition-colors disabled:opacity-50"
+              >
+                {suggestedBudgetH}시간으로 다시 검색
+              </button>
+            )}
+          </div>
+        )}
+
+        {resolved && candidates.length > 0 && scored.length === 0 && (
+          <div className="mt-4 rounded-md border border-warn bg-warn-surface p-3 text-xs text-warn dark:border-warn dark:bg-warn-surface dark:text-warn">
+            <p className="font-semibold">
+              코스 {candidates.length}개를 만들었지만 조건으로 전부 제외됐어요
+            </p>
+            {excludeSummary && (
+              <p className="mt-1 text-xs text-warn dark:text-warn">
+                {excludeSummary}
+              </p>
+            )}
+            {hasCaps && (
+              <button
+                type="button"
+                onClick={resetCaps}
+                className="mt-3 rounded-sm bg-warn-strong px-4 py-2 text-xs font-semibold text-primary transition-colors"
+              >
+                시간·비용 제한 해제
+              </button>
+            )}
+          </div>
+        )}
+    </>
+  );
+
   return (
     <div className="flex-1">
       {!embedded && (
@@ -1569,19 +1777,11 @@ export function Planner({
             data-planner-controls
             onClickCapture={invalidatePrimarySearch}
             onChangeCapture={invalidatePrimarySearch}
-            className="rounded-md border border-line bg-raised p-5 sm:p-6"
+            data-gubi-planner
+            className="gb-planner"
           >
 
-          <div data-planner-mode className="relative inline-grid grid-cols-2 rounded-md bg-raised p-1 ring-1 ring-inset ring-line">
-            <span
-              aria-hidden
-              className="pointer-events-none absolute bottom-1 left-1 top-1 w-[calc((100%-0.5rem)/2)] rounded-md bg-accent"
-              style={{
-                transform: mode === "dest" ? "translateX(100%)" : "translateX(0)",
-                transition: "transform 0.34s ease-out",
-                willChange: "transform",
-              }}
-            />
+          <div data-planner-mode role="group" aria-label="코스 형태" className="gb-mode">
             {(
               [
                 ["loop", "순환형", IconLoop],
@@ -1590,19 +1790,19 @@ export function Planner({
             ).map(([id, label, Icon]) => (
               <button
                 key={id}
+                type="button"
+                aria-pressed={mode === id}
                 onClick={() => setMode(id)}
-                className={`relative z-10 inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold transition-colors duration-200 ${
-                  mode === id ? "text-primary" : "text-secondary hover:text-primary"
-                }`}
+                className="gb-mode-btn"
               >
-                <Icon className="h-4 w-4" />
+                <Icon />
                 {label}
               </button>
             ))}
           </div>
 
-          <form data-planner-form onSubmit={search} className="mt-5 flex flex-col gap-3">
-            <div data-planner-places className="flex flex-col gap-3 sm:flex-row">
+          <form data-planner-form onSubmit={search} className="gb-form">
+            <p className="gb-label">출발</p>
               <PlaceInput
                 value={origin}
                 selectedName={originPlace?.name}
@@ -1625,7 +1825,9 @@ export function Planner({
                 onLocate={locateMe}
                 locating={locating}
               />
-              {mode === "dest" ? (
+            {mode === "dest" ? (
+              <>
+                <p className="gb-label">도착</p>
                 <PlaceInput
                   value={destination}
                   selectedName={destPlace?.name}
@@ -1640,37 +1842,34 @@ export function Planner({
                   placeholder="목적지 (예: 강릉역)"
                   onMapPick={() => setMapPickFor("dest")}
                 />
-              ) : (
-                <select
-                  value={budgetH}
-                  onChange={(e) => setBudgetH(Number(e.target.value))}
-                  className="shrink-0 rounded-md border border-line bg-raised px-4 py-3 text-sm text-primary outline-none transition-colors focus:border-line sm:w-40"
-                >
+              </>
+            ) : (
+              <>
+                <p className="gb-label">얼마나 달릴까요</p>
+                <div role="group" aria-label="달릴 시간" className="gb-seg">
                   {BUDGET_OPTIONS.map((h) => (
-                    <option key={h} value={h}>
-                      {h}시간 코스
-                    </option>
+                    <button
+                      key={h}
+                      type="button"
+                      aria-pressed={budgetH === h}
+                      onClick={() => setBudgetH(h)}
+                      className="gb-seg-btn"
+                    >
+                      {h}시간
+                    </button>
                   ))}
-                </select>
-              )}
-            </div>
-            <button
-              type="submit"
-              disabled={loading}
-              className="flex w-full items-center justify-center gap-2 rounded-md bg-accent py-4 text-[15px] font-semibold text-primary transition-colors disabled:opacity-50"
-            >
-              <IconSearch className="h-[18px] w-[18px]" />
-              {loading ? "코스 찾는 중" : "코스 추천"}
-            </button>
-          </form>
+                </div>
+              </>
+            )}
 
-          <div data-planner-filters className="mt-6 border-t border-line pt-6">
-            {/* 드라이브 종류 — 이 앱의 핵심이라 항상 보인다 */}
-            <FilterRow label="드라이브 종류">
+            {/* 드라이브 종류 — 이 앱의 핵심이라 항상 보인다. 값은 그대로, 화면엔 짧은 이름 */}
+            <p className="gb-label">어떤 길 (여러 개 고르기)</p>
+            <div data-planner-styles role="group" aria-label="드라이브 종류" className="gb-seg">
               {DRIVE_STYLES.map((s) => (
-                <Chip
+                <button
                   key={s}
-                  active={driveStyles.includes(s)}
+                  type="button"
+                  aria-pressed={driveStyles.includes(s)}
                   onClick={() =>
                     setDriveStyles((prev) =>
                       prev.includes(s)
@@ -1678,26 +1877,28 @@ export function Planner({
                         : [...prev, s],
                     )
                   }
+                  className="gb-road-btn"
                 >
-                  {s}
-                </Chip>
+                  {s.replace(/도로$/, "")}
+                </button>
               ))}
-            </FilterRow>
+            </div>
 
-            <button
-              type="button"
-              onClick={() => setShowAdvanced((v) => !v)}
-              aria-expanded={showAdvanced}
-              data-planner-advanced
-              className="mt-4 flex w-full items-center justify-between rounded-md px-1 py-2 text-[13px] font-medium text-secondary transition-colors hover:text-primary"
-            >
-              세부 설정
-              <IconChevronRight
-                className={`h-4 w-4 transition-transform duration-200 ${
-                  showAdvanced ? "rotate-90" : ""
-                }`}
-              />
-            </button>
+            <div className="gb-go">
+              <button
+                type="button"
+                onClick={() => setShowAdvanced((v) => !v)}
+                aria-expanded={showAdvanced}
+                data-planner-advanced
+                className="gb-adv"
+              >
+                세부 설정
+              </button>
+              <button type="submit" disabled={loading} className="gb-cta">
+                {loading ? "코스 찾는 중" : "코스 추천"}
+              </button>
+            </div>
+          </form>
 
             {showAdvanced && !restricted && (
               <div data-planner-options data-map-block={embedded ? "" : undefined}
@@ -1928,7 +2129,6 @@ export function Planner({
             )}
               </div>
             )}
-          </div>
           </section>
         </div>
 
@@ -1977,7 +2177,7 @@ export function Planner({
                       </span>
                       {r.styles.length > 0 && (
                         <span className="ml-2 text-xs text-accent-text dark:text-accent-text">
-                          {r.styles.join("·")}
+                          {r.styles.map((s) => s.replace(/도로$/, "")).join(" ")}
                         </span>
                       )}
                     </span>
@@ -2133,601 +2333,422 @@ export function Planner({
               onClick={(e) => e.stopPropagation()}
               className={`results-dialog flex max-h-full w-full max-w-3xl flex-col overflow-hidden bg-bg outline-none sm:rounded-md sm:border sm:border-line ${embedded ? "md:max-w-none" : ""}`}
             >
-              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-panel px-5 py-4">
-                <div className="min-w-0">
-                  <h2
-                    id="results-title"
-                    className="flex items-center gap-2 text-base font-bold tracking-tight"
-                  >
-                    <span className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-accent text-primary">
-                      <IconCompass className="h-3.5 w-3.5" />
-                    </span>
-                    {scored.length > 0
-                      ? `추천 코스 ${scored.length}개`
-                      : `조건에 맞는 코스 없음 (${candidates.length}개 중)`}
-                  </h2>
-                  {resultRouteText && (
-                    <p className="mt-1 truncate pl-8 text-[12px] text-secondary">
-                      {resultRouteText}
-                    </p>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setResultsOpen(false)}
-                  aria-label="결과 닫기"
-                  className="grid h-8 w-8 shrink-0 place-items-center rounded-sm text-secondary transition-colors hover:bg-raised hover:text-primary dark:hover:bg-raised dark:hover:text-primary"
-                >
-                  <IconClose className="h-5 w-5" />
-                </button>
-              </div>
-              <div className="results-body min-h-0 flex-1 overflow-y-auto px-5 pb-10 pt-1 sm:px-6">
-                <div className="results-sidebar">
-                  <div className="results-notices">
-
-        {resultsStale && (
-          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-warn bg-warn-surface p-3 text-xs text-warn">
-            <span>검색 조건이 바뀌었어요. 이 결과는 이전 검색이에요.</span>
-            <button
-              type="button"
-              onClick={() => {
-                setResultsOpen(false);
-                void doSearch();
-              }}
-              className="shrink-0 rounded-sm bg-warn-strong px-4 py-2 text-xs font-semibold text-warn transition-colors"
-            >
-              현재 조건으로 다시 검색
-            </button>
-          </div>
-        )}
-
-        {/* 에러는 모달 안에서도 보여야 한다 — 밖 배너는 모달에 가려짐 */}
-        {error && (
-          <div className="mt-2 flex items-start gap-3 rounded-md border border-danger bg-danger-surface p-3 text-xs text-danger dark:border-danger dark:bg-danger-surface dark:text-danger">
-
-            <span>{error}</span>
-          </div>
-        )}
-
-        {conditions && conditions.notes.length > 0 && candidates.length > 0 && (
-          <div className="mt-2 flex items-start gap-3 rounded-md border border-accent bg-accent-surface p-3 text-xs text-accent-text dark:border-accent dark:bg-accent-surface dark:text-accent-text">
-
-            <div className="space-y-1">
-              {conditions.notes.map((n) => (
-                <p key={n}>{cleanLabel(n)}</p>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {notes.length > 0 && (
-          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-warn bg-warn-surface p-3 text-xs text-warn dark:border-warn dark:bg-warn-surface dark:text-warn">
-            <span>{notes.map((n) => cleanLabel(n)).join(" ")}</span>
-            {coastIntensity !== "max" && (
-              <button
-                type="button"
-                onClick={() => {
-                  setCoastIntensity("max");
-                  doSearch({ coast: "max" });
-                }}
-                disabled={loading}
-                className="rounded-sm bg-warn-strong px-4 py-2 text-xs font-medium text-primary transition-colors disabled:opacity-50"
-              >
-                최대 강도로 다시 검색
-              </button>
-            )}
-          </div>
-        )}
-
-        {budgetMiss && (
-          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-danger bg-danger-surface p-3 text-xs text-danger dark:border-danger dark:bg-danger-surface dark:text-danger">
-            <span>
-              {searchedBudgetH}시간 코스 없음 (가장 짧은 코스 <b>{formatDuration(minDurationSec)}</b>)
-              {pinned.length > 0 && " 필수 경유지가 멀어서 그럴 수 있어요."}
-            </span>
-            {suggestedBudgetH > searchedBudgetH && (
-              <button
-                type="button"
-                onClick={() => doSearch({ budgetH: suggestedBudgetH })}
-                disabled={loading}
-                className="rounded-sm bg-danger-strong px-4 py-2 text-xs font-medium text-primary transition-colors disabled:opacity-50"
-              >
-                {suggestedBudgetH}시간으로 다시 검색
-              </button>
-            )}
-          </div>
-        )}
-
-        {resolved && candidates.length > 0 && (
-          <>
-            <div className="mt-3 flex flex-wrap items-baseline gap-x-2 gap-y-1">
-              <h2 className="text-sm font-semibold tracking-tight">
-                {resolved.to
-                  ? `${cleanLabel(resolved.from.name)} – ${cleanLabel(resolved.to.name)}`
-                  : `${cleanLabel(resolved.from.name)} 출발 (${searchedBudgetH}시간 순환)`}
-              </h2>
-              {metricsLoading && (
-                <span className="animate-pulse text-xs text-secondary dark:text-secondary">
-                  도로 지표 계산 중…
-                </span>
-              )}
-              {excludedCount > 0 && (
-                <span className="text-xs text-warn">
-                  {excludeSummary || `상한 초과 ${excludedCount}개`} 제외
-                </span>
-              )}
-            </div>
-            {/* 확정된 실제 주소 — 동명 장소를 잘못 고르지 않았는지 확인용 */}
-            {(resolved.from.address || resolved.to?.address) && (
-              <p className="mt-1 truncate text-[12px] text-secondary dark:text-secondary">
-                {cleanLabel(resolved.from.address || resolved.from.name)}
-                {resolved.to && ` – ${cleanLabel(resolved.to.address || resolved.to.name)}`}
-              </p>
-            )}
-
-          </>
-        )}
-
-        {resolved && candidates.length > 0 && scored.length === 0 && (
-          <div className="mt-4 rounded-md border border-warn bg-warn-surface p-3 text-xs text-warn dark:border-warn dark:bg-warn-surface dark:text-warn">
-            <p className="font-semibold">
-              코스 {candidates.length}개를 만들었지만 조건으로 전부 제외됐어요
-            </p>
-            {excludeSummary && (
-              <p className="mt-1 text-xs text-warn dark:text-warn">
-                {excludeSummary}
-              </p>
-            )}
-            {hasCaps && (
-              <button
-                type="button"
-                onClick={resetCaps}
-                className="mt-3 rounded-sm bg-warn-strong px-4 py-2 text-xs font-semibold text-primary transition-colors"
-              >
-                시간·비용 제한 해제
-              </button>
-            )}
-          </div>
-        )}
-
+              {resultView === "list" ? (
+                <div data-gubi-results className="gb-list">
+                  <div className="gb-list-top">
+                    <h2 id="results-title" className="gb-logo">
+                      <svg width="32" height="32" viewBox="0 0 30 30" aria-hidden="true">
+                        <path d="M4 24c6 0 6-9 11-9s5-9 11-9" fill="none" stroke="#F5C542" strokeWidth="3.6" strokeLinecap="round" />
+                      </svg>
+                      굽이
+                      <span className="sr-only">추천 코스 {scored.length}개</span>
+                    </h2>
+                    {resolved && (
+                      <p className="gb-list-origin">
+                        <b>{cleanLabel(resolved.from.name)}</b> 출발
+                        {resolved.from.address && resolved.from.address !== resolved.from.name && (
+                          <span className="gb-list-addr"> ({cleanLabel(resolved.from.address)})</span>
+                        )}
+                      </p>
+                    )}
                   </div>
-        {selectedCandidate && (() => {
-          const c = selectedCandidate;
-          return (
-            <section className="results-route-content mt-4 space-y-4 pb-12" aria-label="선택 코스">
-              {visiblePickedPoi && (
-                <PoiCard
-                  key={`${poiIdentity}|${visiblePickedPoi.name}`}
-                  place={visiblePickedPoi}
-                  adding={rerouting}
-                  onAdd={() => {
-                    if (currentPoiIdentity.current === poiIdentity) addWaypoint(visiblePickedPoi);
-                    setPickedPoi(null);
-                  }}
-                  onClose={() => setPickedPoi(null)}
-                />
-              )}
-              <div className="space-y-2" aria-label="추천 코스 목록">
-              {scored.map((c, rank) => (
-                <div
-                  key={c.label}
-                  onClick={() => setSelected(c.label)}
-                  className={`results-route-card cursor-pointer rounded-md border bg-panel p-3 ${c.label === selectedLabel ? "border-accent" : "results-route-card-unselected border-line"}`}
-                >
-                  <button
-                    type="button"
-                    aria-pressed={c.label === selectedLabel}
-                    onClick={() => setSelected(c.label)}
-                    className="flex w-full items-center justify-between gap-2 text-left"
-                  >
-                    <span className="min-w-0 truncate text-sm font-semibold">{rank + 1}. {cleanLabel(c.label)}</span>
-                    <span className="shrink-0 text-sm font-semibold text-accent-text">{c.score.total}점</span>
-                  </button>
-                  <p className="mt-1 flex flex-wrap gap-x-2 text-xs text-secondary">
-                    <span className="whitespace-nowrap">총 거리 {(c.distanceM / 1000).toFixed(1)}km</span>
-                    <span className="whitespace-nowrap">예상 소요시간 {formatDuration(c.durationSec)}</span>
-                  </p>
-                  {courseWhy(c, driveStyles) && (
-                    <p data-course-why className="mt-1 text-xs text-primary">추천 이유: {courseWhy(c, driveStyles)}</p>
-                  )}
-                  {resolved && c.label === selectedLabel && <PleosCourseEstimate compact candidate={c} from={resolved.from.coord} destination={resolved.to?.coord ?? null} />}
-                  {c.label === selectedLabel && <StyleHighlights candidate={c} styles={driveStyles} />}
-                  <button
-                    type="button"
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      setSelected(c.label);
-                      // 코스를 Gubi에 물려준다 — 주행 종료 때 예상 vs 실제 비교
-                      const planForDrive = {
-                        label: c.label,
-                        durationSec: c.durationSec,
-                        distanceM: c.distanceM,
-                        routeSource: c.routeSource,
-                        path: encodePolyline(
-                          c.path.map((p): [number, number] => [p.lat, p.lng]),
-                        ),
-                        vias: (c.waypoints ?? [])
-                          .filter((w) => !/^해안\d+$/.test(w.name))
-                          .slice(0, 20)
-                          .map((w) => ({
-                            name: w.name,
-                            lat: w.coord.lat,
-                            lng: w.coord.lng,
-                            dwellMin: w.dwellMin ?? 0,
-                          })),
-                      };
-                      if (onDrive) {
-                        onDrive(planForDrive);
-                        return;
-                      }
-                      if (BORROW_SERVER) {
-                        // 빌려 쓰기 모드: 코스 전달함(/api/drive-plan, 서버 저장)을 쓰지 않고
-                        // 같은 주소의 /log가 읽는 세션 보관함으로 넘긴다.
-                        // 코스 경로가 담기므로 기기 안 열쇠로 암호화해 둔다(안 되면 평문).
-                        try {
-                          await writeSecureJson("drivelog-pending-plan-v1", planForDrive, secureDepsFor(sessionStorage));
-                        } catch {}
-                        window.location.href = withBasePath("/log");
-                        return;
-                      }
-                      try {
-                        const res = await fetch("/api/drive-plan", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify(planForDrive),
-                        });
-                        const data = await res.json();
-                        if (!res.ok || typeof data.id !== "string") {
-                          throw new Error(data.error ?? "코스를 전달하지 못했어요");
-                        }
-                        const h = location.hostname;
-                        const target = h.startsWith("drive.")
-                          ? `${location.protocol}//drivelog.${h.slice(6)}/log`
-                          : "/log";
-                        window.location.href = `${target}?plan=${encodeURIComponent(data.id)}`;
-                      } catch (err) {
-                        setError(err instanceof Error ? err.message : "코스를 전달하지 못했어요");
-                      }
-                    }}
-                    className="mt-2 flex min-h-14 w-full items-center justify-center gap-2 rounded-md bg-accent px-4 text-sm font-semibold text-primary transition-colors"
-                  >
-                    이 코스로 주행
-                  </button>
-                </div>
-              ))}
-              </div>
-              <section aria-labelledby="course-details-title" className="space-y-3 border-t border-line pt-4">
-                <h3 id="course-details-title" className="text-base font-semibold">상세정보</h3>
-                <CourseDetails
-                  key={`details|${selectedPathKey}`}
-                  candidate={c}
-                  from={resolved?.from.coord ?? null}
-                  destination={resolved?.to?.coord ?? null}
-                  durationText={formatDuration(c.durationSec)}
-                  motionSickness={motionSickness}
-                  rerouting={rerouting}
-                  budgetDifference={isLoopResult && Math.abs(c.durationSec - budgetSec) > BUDGET_TOLERANCE_SEC ? formatDiff(c.durationSec - budgetSec) : undefined}
-                  onCycleDwell={(index) => cycleDwell(c.label, index)}
-                  onRemoveWaypoint={(index) => { if (!rerouting) removeWaypoint(c, index); }}
-                />
-            {selectedCandidate && (
-              <details key={`nearby|${selectedPathKey}`} className="mt-4 rounded-md border border-line bg-raised p-4 dark:border-line dark:bg-panel">
-                <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold">
-                  이 코스 주변 추천 명소
-                  {visibleCourseSpots && visibleCourseSpots.length > 0 && (
-                    <span className="rounded-sm bg-ok-surface px-2 py-1 text-[11px] font-medium text-ok dark:bg-ok-surface dark:text-ok">
-                      지도에 {visibleCourseSpots.length}곳
-                    </span>
-                  )}
-                  <span className="ml-auto text-xs text-secondary">펼치기</span>
-                </summary>
-                <div className="mt-3">
-                {/* 종류 필터 — 카페만·맛집만·볼거리만 */}
-                <div className="flex gap-2">
-                  {(
-                    [
-                      ["all", "전체"],
-                      ["cafe", "카페"],
-                      ["food", "음식점"],
-                      ["sight", "볼거리"],
-                      ["gas", "주유소"],
-                    ] as const
-                  ).map(([id, label]) => (
-                    <button
-                      key={id}
-                      type="button"
-                      aria-pressed={courseSpotFilter === id}
-                      onClick={() => setCourseSpotFilter(id)}
-                      className={`rounded-sm px-3 py-1 text-xs font-medium transition-colors ${
-                        courseSpotFilter === id
-                          ? "bg-accent text-primary"
-                          : "bg-raised text-secondary ring-1 ring-inset ring-line"
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                {/* 카페·맛집만 볼 땐 조금 돌아가도 들를 곳 — 누르면 그곳을 들르는 코스로 */}
-                {!visibleCourseSpotsLoading &&
-                  (courseSpotFilter === "cafe" ||
-                    courseSpotFilter === "food" ||
-                    courseSpotFilter === "gas") &&
-                  visibleCourseSpots &&
-                  visibleCourseSpots.length > 0 && (
-                    <ul className="mt-3 divide-y divide-line dark:divide-line">
-                      {visibleCourseSpots.slice(0, 6).map((p) => {
-                        const off = p.offRouteM ?? 0;
-                        // 왕복 우회 대략치: 2×거리, 평균 40km/h
-                        const extraMin = Math.max(1, Math.round(((off * 2) / 1000 / 40) * 60));
-                        return (
-                          <li key={`${p.name}|${p.coord.lat}`} className="flex items-center gap-2 py-2">
-                            <span className="min-w-0 flex-1">
-                              <span className="block truncate text-sm font-medium">{cleanLabel(p.name)}</span>
-                              <span className="block truncate text-xs text-secondary">
-                                {p.price != null && `${cleanLabel(p.fuel ?? "휘발유")} ${p.price.toLocaleString()}원 `}
-                                {p.rating != null && `평점 ${p.rating} `}
-                                {off < 300
-                                  ? "길가"
-                                  : `(+${extraMin}분)`}
-                              </span>
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => { if (currentPoiIdentity.current === poiIdentity) addWaypoint(p); }}
-                              disabled={rerouting}
-                              className="shrink-0 rounded-sm bg-accent px-3 py-1 text-xs font-semibold text-primary disabled:opacity-40"
-                            >
-                              + 들르기
-                            </button>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                {visibleCourseSpotsLoading ? (
-                  <p className="mt-2 animate-pulse text-xs text-secondary dark:text-secondary">
-                    주변 추천 명소 찾는 중…
-                  </p>
-                ) : visibleCourseSpotsError ? (
-                  <p className="mt-2 flex items-center gap-2 text-xs text-warn dark:text-warn">
-                    명소를 불러오지 못했어요
-                    <button
-                      type="button"
-                      onClick={loadCourseSpots}
-                      className="underline hover:text-warn dark:hover:text-warn"
-                    >
-                      다시 시도
-                    </button>
-                  </p>
-                ) : visibleCourseSpots && visibleCourseSpots.length > 0 ? (
-                  <p className="mt-2 flex items-center gap-2 text-xs text-secondary dark:text-secondary">
-                    지도에 <b className="text-primary dark:text-primary">{visibleCourseSpots.length}곳</b> 표시됨
-                    <button
-                      type="button"
-                      onClick={loadCourseSpots}
-                      className="text-secondary underline hover:text-disabled dark:hover:text-primary"
-                    >
-                      다시 받기
-                    </button>
-                  </p>
-                ) : visibleCourseSpots && visibleCourseSpots.length === 0 ? (
-                  <p className="mt-2 flex items-center gap-2 text-xs text-secondary dark:text-secondary">
-                    {courseSpotFilter === "gas"
-                      ? "이 코스 3km 안엔 주유소가 없어요"
-                      : courseSpotFilter === "cafe"
-                      ? "이 코스 3km 안엔 카페가 없어요"
-                      : courseSpotFilter === "food"
-                        ? "코스 3km 안에 음식점이 없어요"
-                        : "이 코스 길가에서 추천할 곳을 못 찾았어요"}
-                    <button
-                      type="button"
-                      onClick={loadCourseSpots}
-                      className="underline hover:text-disabled dark:hover:text-primary"
-                    >
-                      다시
-                    </button>
-                  </p>
-                ) : null}
-                <details className="mt-3">
-                  <summary className="cursor-pointer list-none text-xs font-semibold tracking-wide text-secondary hover:text-primary dark:text-secondary dark:hover:text-primary">
-                    직접 찾기 펼치기
-                  </summary>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    {WAYPOINT_TYPES.map((t) => (
-                    <Chip
-                      key={t}
-                      tone="emerald"
-                      active={nearbyTypes.includes(t)}
-                      onClick={() => {
-                        nearbyAbort.current?.abort();
-                        nearbyRequest.current++;
-                        setNearbyLoading(false);
-                        setNearby(null);
-                        setNearbyTypes((prev) =>
-                          prev.includes(t)
-                            ? prev.filter((v) => v !== t)
-                            : [...prev, t],
-                        );
-                      }}
-                    >
-                      {t === "맛집" ? "음식점" : t}
-                    </Chip>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={searchNearby}
-                    disabled={visibleNearbyLoading || nearbyTypes.length === 0}
-                    className="ml-1 rounded-sm bg-accent px-4 py-1 text-xs font-medium text-primary transition-colors disabled:opacity-40"
-                  >
-                    {visibleNearbyLoading ? "검색 중…" : "주변 검색"}
-                  </button>
-                </div>
-
-                {visibleNearby && visibleNearby.length === 0 && (
-                  <p className="mt-3 text-xs text-secondary dark:text-secondary">
-                    경로 주변에서 찾은 장소가 없어요.
-                  </p>
-                )}
-                {visibleNearby && visibleNearby.length > 0 && (
-                  <ul className="mt-3 grid gap-2 sm:grid-cols-2">
-                    {visibleNearby.map((p) => (
-                      <li
-                        key={`${p.name}|${p.address}`}
-                        className="flex items-center justify-between gap-2 rounded-md border border-line dark:border-line bg-raised dark:bg-raised px-3 py-2"
-                      >
-                        <span className="min-w-0">
-                          <span className="block truncate text-sm font-medium">
-                            {cleanLabel(p.name)}
-                          </span>
-                          <span className="block truncate text-xs text-secondary dark:text-secondary">
-                            {p.type ? cleanLabel(p.type) : p.address ? cleanLabel(p.address) : ""}
-                          </span>
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => { if (currentPoiIdentity.current === poiIdentity) addWaypoint(p); }}
-                          disabled={rerouting}
-                          className="shrink-0 rounded-sm bg-accent px-3 py-1 text-xs font-medium text-primary transition-colors disabled:opacity-40"
-                        >
-                          + 경유
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                <form
-                  onSubmit={searchWaypoint}
-                  className="mt-3 flex items-center gap-2 border-t border-line dark:border-line pt-3"
-                >
-                  <span className="shrink-0 text-xs text-secondary dark:text-secondary">
-                    직접 검색
-                  </span>
-                  <input
-                    value={wpQuery}
-                    onChange={(e) => {
-                      waypointAbort.current?.abort();
-                      waypointRequest.current++;
-                      setWpSearching(false);
-                      setWpResults(null);
-                      setWpQuery(e.target.value);
-                    }}
-                    placeholder="장소 이름 (예: 경포대)"
-                    className="min-w-0 flex-1 rounded-md border border-line dark:border-line px-3 py-2 text-sm outline-none transition-colors placeholder:text-secondary dark:placeholder:text-secondary focus:border-line"
-                  />
-                  <button
-                    type="submit"
-                    disabled={wpSearching || !wpQuery.trim()}
-                    className="shrink-0 rounded-sm bg-accent px-4 py-2 text-xs font-medium text-primary transition-colors disabled:opacity-40"
-                  >
-                    {wpSearching ? "검색 중…" : "검색"}
-                  </button>
-                </form>
-                {wpResults && wpResults.length === 0 && (
-                  <p className="mt-2 text-xs text-secondary dark:text-secondary">
-                    검색 결과가 없어요.
-                  </p>
-                )}
-                {wpResults && wpResults.length > 0 && (
-                  <ul className="mt-2 grid gap-2 sm:grid-cols-2">
-                    {wpResults.map((p) => (
-                      <li
-                        key={`${p.name}|${p.address}`}
-                        className="flex items-center justify-between gap-2 rounded-md border border-line dark:border-line bg-raised dark:bg-raised px-3 py-2"
-                      >
-                        <span className="min-w-0">
-                          <span className="block truncate text-sm font-medium">
-                            {cleanLabel(p.name)}
-                          </span>
-                          <span className="block truncate text-xs text-secondary dark:text-secondary">
-                            {p.address && cleanLabel(p.address)}
-                          </span>
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => { if (currentPoiIdentity.current === poiIdentity) addWaypoint(p); }}
-                          disabled={rerouting}
-                          className="shrink-0 rounded-sm bg-accent px-3 py-1 text-xs font-medium text-primary transition-colors disabled:opacity-40"
-                        >
-                          + 경유
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                  {rerouting && (
-                    <p className="mt-2 animate-pulse text-xs text-secondary dark:text-secondary">
-                      경유지 반영해서 재탐색 중…
+                  <div className="gb-list-head">
+                    <p className="gb-list-summary">
+                      <b>
+                        {resolved?.to
+                          ? `${cleanLabel(resolved.to.name)}까지`
+                          : `${searchedBudgetH}시간 순환`}
+                      </b>
+                      {resultStyles.length > 0 && (
+                        <span className="gb-list-styles">{resultStyles.map((s) => s.replace(/도로$/, "")).join(" ")}</span>
+                      )}
+                      {metricsLoading && <span className="gb-list-note">도로 정보 계산 중</span>}
+                      {excludedCount > 0 && (
+                        <span className="gb-list-note">({excludeSummary || `상한 초과 ${excludedCount}개`} 제외)</span>
+                      )}
                     </p>
-                  )}
-                </details>
-                </div>
-              </details>
-            )}
-
-              </section>
-            </section>
-          );
-        })()}
-                </div>
-                {selectedCandidate && (
-                  <div className="results-map min-w-0 flex-col">
-                    <RouteMapOSM
-                      heightClass="results-map-surface"
-                      vehicleTouch={embedded}
-                      routes={scored.map((candidate) => ({
-                        label: candidate.label,
-                        path: candidate.path,
-                        trafficSamples: trafficCache[pathHash(candidate.path)]?.samples,
-                        coastSamples: candidate.metrics?.coast,
-                        highlights: candidate.highlights,
-                      }))}
+                    <button type="button" className="gb-ghost" onClick={() => setResultsOpen(false)}>
+                      조건 바꾸기
+                    </button>
+                  </div>
+                  <div className="gb-list-alerts">{resultAlerts}</div>
+                  {scored.length > 0 && (
+                    <CourseCards
                       selected={selectedLabel}
-                      onRouteClick={setSelected}
-                      colorMode={effectiveMapMode === "coast" ? "none" : effectiveMapMode}
-                      coastOverlay={effectiveMapMode === "coast"}
-                      modeSelector={([
-                        ["traffic", "교통", true],
-                        ["winding", "와인딩", hasWinding],
-                      ] as const).map(([id, label, available]) => (
-                        <button
-                          key={id}
-                          type="button"
-                          disabled={!available}
-                          aria-pressed={effectiveMapMode === id}
-                          title={available ? undefined : `${label} 정보 없음`}
-                          aria-label={available ? label : `${label} (이 코스엔 정보 없음)`}
-                          onClick={() => setResultMapMode(id)}
-                          className={`rounded-sm px-3 py-2 text-[11px] font-medium min-h-9 ${effectiveMapMode === id ? "bg-accent text-primary" : available ? "bg-panel text-primary ring-1 ring-inset ring-line" : "cursor-not-allowed bg-panel text-disabled ring-1 ring-inset ring-line"}`}
-                        >{label}</button>
-                      ))}
-                      pois={[...(visibleCourseSpots ?? []), ...(visibleNearby ?? [])]}
+                      onOpen={(label) => {
+                        setSelected(label);
+                        setResultView("detail");
+                      }}
+                      items={scored.map((c) => ({
+                        label: c.label,
+                        title: courseTitle(c, resultStyles),
+                        path: c.path,
+                        distanceM: c.distanceM,
+                        durationSec: c.durationSec,
+                        why: courseWhy(c, resultStyles),
+                        photoStyles: c.styleTag ? [c.styleTag] : resultStyles,
+                        photoKey: `${c.label}|${pathHash(c.path)}`,
+                      }))}
+                    />
+                  )}
+                </div>
+              ) : selectedCandidate ? (
+                <div data-gubi-detail className="gb-detail">
+                  <div className="gb-detail-map">
+                    <RouteMapOSM
+                      variant="gubi"
+                      heightClass="gb-map-surface"
+                      vehicleTouch={embedded}
+                      routes={[{
+                        label: selectedCandidate.label,
+                        path: selectedCandidate.path,
+                        trafficSamples: trafficCache[selectedPathKey]?.samples,
+                      }]}
+                      selected={selectedLabel}
+                      loop={isLoopResult}
+                      special={selectedSpecial}
+                      specialKinds={specialKindsFor(resultStyles)}
+                      stops={selectedStops}
+                      topLeft={
+                        <button type="button" className="gb-back" onClick={() => setResultView("list")}>
+                          ‹ 코스 {scored.length}개
+                        </button>
+                      }
+                      callout={selectedSpots && selectedSpots.length > 0 ? (
+                        <FirstRoadview
+                          key={selectedPathKey}
+                          points={selectedSpots}
+                          variant="callout"
+                          onShow={(pt) => setShownSpot({ key: selectedPathKey, coord: pt.coord })}
+                        />
+                      ) : undefined}
+                      calloutAt={shownSpot?.key === selectedPathKey ? shownSpot.coord : null}
+                      // 주변 명소 핀은 "이 코스 주변 추천 명소"를 펼쳤을 때만 — 코스 지도가 핀으로 덮이지 않게
+                      pois={spotsOpenKey === selectedPathKey ? [...(visibleCourseSpots ?? []), ...(visibleNearby ?? [])] : undefined}
                       onPoiClick={(name) => {
                         const place = [...(visibleCourseSpots ?? []), ...(visibleNearby ?? [])].find((p) => p.name === name);
                         setPickedPoi(place ? { identity: poiIdentity, place } : null);
                       }}
+                      poiCard={visiblePickedPoi ? (
+                        <PoiCard
+                          key={`${poiIdentity}|${visiblePickedPoi.name}`}
+                          place={visiblePickedPoi}
+                          adding={rerouting}
+                          onAdd={() => {
+                            if (currentPoiIdentity.current === poiIdentity) addWaypoint(visiblePickedPoi);
+                            setPickedPoi(null);
+                          }}
+                          onClose={() => setPickedPoi(null)}
+                        />
+                      ) : undefined}
                     />
-                    {/* 로드뷰는 지도 아래에 넓게 — 카드 안 작은 칸에선 잘 안 보였다(유저, 2026-11-13) */}
-                    <div className="results-map-roadview shrink-0 px-3 pb-3" onClick={(e) => e.stopPropagation()}>
-                      <RoadviewStrip
-                        key={selectedPathKey}
-                        wide
-                        path={selectedCandidate.path}
-                        // 고른 종류가 있으면 그 풍경만 — 강변·해안을 골랐으면 물이 보이는 지점만 보여 준다
-                        styles={driveStyles.length ? driveStyles : selectedCandidate.styleTag ? [selectedCandidate.styleTag] : []}
-                        emptyText={
-                          driveStyles.some((st) => st === "강변도로" || st === "해안도로")
-                          && !driveStyles.some((st) => st === "와인딩" || st === "산길" || st === "직선도로")
-                            ? "이 코스엔 로드뷰로 물이 보이는 지점이 없어요"
-                            : undefined
-                        }
-                        // 경로 해시를 섞어 코스별로 캐시를 분리한다(라벨은 검색마다 재사용됨).
-                        cacheKey={`${selectedCandidate.label}|${selectedPathKey}`}
-                      />
-                    </div>
                   </div>
-                )}
-              </div>
+                  {(() => {
+                    const c = selectedCandidate;
+                    const why = courseWhy(c, resultStyles);
+                    return (
+                      <section className="gb-detail-panel" aria-labelledby="results-title">
+                        <div className="gb-panel-scroll">
+                          <h2 id="results-title" className="gb-detail-name">{courseTitle(c, resultStyles)}</h2>
+                          {why && <p className="gb-detail-why">{why}</p>}
+                          <dl className="gb-detail-stats">
+                            <div>
+                              <dt>총 거리</dt>
+                              <dd><BigKm m={c.distanceM} /></dd>
+                            </div>
+                            <div>
+                              <dt>예상 소요시간</dt>
+                              <dd><BigDuration sec={c.durationSec} /></dd>
+                            </div>
+                          </dl>
+                          {/* 취향을 안 골랐으면 코스 자기 종류, 그것도 없으면 굽은 정도·고도 그래프 — 오른쪽이 비지 않게(2026-11-15) */}
+                          <StyleHighlights candidate={c} styles={resultStyles.length ? resultStyles : c.styleTag ? [c.styleTag] : ["와인딩"]} />
+                          <div className="gb-detail-alerts">{resultAlerts}</div>
+                          <details key={`more|${selectedPathKey}`} className="gb-more" onToggle={(e) => { if (!e.currentTarget.open) setSpotsOpenKey(""); }}>
+                            <summary>
+                              상세 정보
+                              <span>(점수 {c.score.total}점, 비용, 경유지)</span>
+                            </summary>
+                            <div className="gb-more-body">
+                              <p className="text-xs text-secondary">경로 이름 ({cleanLabel(c.label)})</p>
+                              {resolved && <PleosCourseEstimate candidate={c} from={resolved.from.coord} destination={resolved.to?.coord ?? null} />}
+                              <CourseDetails
+                                key={`details|${selectedPathKey}`}
+                                candidate={c}
+                                from={resolved?.from.coord ?? null}
+                                destination={resolved?.to?.coord ?? null}
+                                durationText={formatDuration(c.durationSec)}
+                                motionSickness={motionSickness}
+                                rerouting={rerouting}
+                                budgetDifference={isLoopResult && Math.abs(c.durationSec - budgetSec) > BUDGET_TOLERANCE_SEC ? formatDiff(c.durationSec - budgetSec) : undefined}
+                                onCycleDwell={(index) => cycleDwell(c.label, index)}
+                                onRemoveWaypoint={(index) => { if (!rerouting) removeWaypoint(c, index); }}
+                              />
+                              {selectedCandidate && (
+                                <details key={`nearby|${selectedPathKey}`} onToggle={(e) => setSpotsOpenKey(e.currentTarget.open ? selectedPathKey : "")} className="mt-4 rounded-md border border-line bg-raised p-4 dark:border-line dark:bg-panel">
+                                  <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold">
+                                    이 코스 주변 추천 명소
+                                    {visibleCourseSpots && visibleCourseSpots.length > 0 && (
+                                      <span className="rounded-sm bg-ok-surface px-2 py-1 text-[11px] font-medium text-ok dark:bg-ok-surface dark:text-ok">
+                                        지도에 {visibleCourseSpots.length}곳
+                                      </span>
+                                    )}
+                                    <span className="ml-auto text-xs text-secondary">펼치기</span>
+                                  </summary>
+                                  <div className="mt-3">
+                                  {/* 종류 필터 — 카페만·맛집만·볼거리만 */}
+                                  <div className="flex gap-2">
+                                    {(
+                                      [
+                                        ["all", "전체"],
+                                        ["cafe", "카페"],
+                                        ["food", "음식점"],
+                                        ["sight", "볼거리"],
+                                        ["gas", "주유소"],
+                                      ] as const
+                                    ).map(([id, label]) => (
+                                      <button
+                                        key={id}
+                                        type="button"
+                                        aria-pressed={courseSpotFilter === id}
+                                        onClick={() => setCourseSpotFilter(id)}
+                                        className={`rounded-sm px-3 py-1 text-xs font-medium transition-colors ${
+                                          courseSpotFilter === id
+                                            ? "bg-accent text-primary"
+                                            : "bg-raised text-secondary ring-1 ring-inset ring-line"
+                                        }`}
+                                      >
+                                        {label}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  {/* 카페·맛집만 볼 땐 조금 돌아가도 들를 곳 — 누르면 그곳을 들르는 코스로 */}
+                                  {!visibleCourseSpotsLoading &&
+                                    (courseSpotFilter === "cafe" ||
+                                      courseSpotFilter === "food" ||
+                                      courseSpotFilter === "gas") &&
+                                    visibleCourseSpots &&
+                                    visibleCourseSpots.length > 0 && (
+                                      <ul className="mt-3 divide-y divide-line dark:divide-line">
+                                        {visibleCourseSpots.slice(0, 6).map((p) => {
+                                          const off = p.offRouteM ?? 0;
+                                          // 왕복 우회 대략치: 2×거리, 평균 40km/h
+                                          const extraMin = Math.max(1, Math.round(((off * 2) / 1000 / 40) * 60));
+                                          return (
+                                            <li key={`${p.name}|${p.coord.lat}`} className="flex items-center gap-2 py-2">
+                                              <span className="min-w-0 flex-1">
+                                                <span className="block truncate text-sm font-medium">{cleanLabel(p.name)}</span>
+                                                <span className="block truncate text-xs text-secondary">
+                                                  {p.price != null && `${cleanLabel(p.fuel ?? "휘발유")} ${p.price.toLocaleString()}원 `}
+                                                  {p.rating != null && `평점 ${p.rating} `}
+                                                  {off < 300
+                                                    ? "길가"
+                                                    : `(+${extraMin}분)`}
+                                                </span>
+                                              </span>
+                                              <button
+                                                type="button"
+                                                onClick={() => { if (currentPoiIdentity.current === poiIdentity) addWaypoint(p); }}
+                                                disabled={rerouting}
+                                                className="shrink-0 rounded-sm bg-accent px-3 py-1 text-xs font-semibold text-primary disabled:opacity-40"
+                                              >
+                                                + 들르기
+                                              </button>
+                                            </li>
+                                          );
+                                        })}
+                                      </ul>
+                                    )}
+                                  {visibleCourseSpotsLoading ? (
+                                    <p className="mt-2 animate-pulse text-xs text-secondary dark:text-secondary">
+                                      주변 추천 명소 찾는 중…
+                                    </p>
+                                  ) : visibleCourseSpotsError ? (
+                                    <p className="mt-2 flex items-center gap-2 text-xs text-warn dark:text-warn">
+                                      명소를 불러오지 못했어요
+                                      <button
+                                        type="button"
+                                        onClick={loadCourseSpots}
+                                        className="underline hover:text-warn dark:hover:text-warn"
+                                      >
+                                        다시 시도
+                                      </button>
+                                    </p>
+                                  ) : visibleCourseSpots && visibleCourseSpots.length > 0 ? (
+                                    <p className="mt-2 flex items-center gap-2 text-xs text-secondary dark:text-secondary">
+                                      지도에 <b className="text-primary dark:text-primary">{visibleCourseSpots.length}곳</b> 표시됨
+                                      <button
+                                        type="button"
+                                        onClick={loadCourseSpots}
+                                        className="text-secondary underline hover:text-disabled dark:hover:text-primary"
+                                      >
+                                        다시 받기
+                                      </button>
+                                    </p>
+                                  ) : visibleCourseSpots && visibleCourseSpots.length === 0 ? (
+                                    <p className="mt-2 flex items-center gap-2 text-xs text-secondary dark:text-secondary">
+                                      {courseSpotFilter === "gas"
+                                        ? "이 코스 3km 안엔 주유소가 없어요"
+                                        : courseSpotFilter === "cafe"
+                                        ? "이 코스 3km 안엔 카페가 없어요"
+                                        : courseSpotFilter === "food"
+                                          ? "코스 3km 안에 음식점이 없어요"
+                                          : "이 코스 길가에서 추천할 곳을 못 찾았어요"}
+                                      <button
+                                        type="button"
+                                        onClick={loadCourseSpots}
+                                        className="underline hover:text-disabled dark:hover:text-primary"
+                                      >
+                                        다시
+                                      </button>
+                                    </p>
+                                  ) : null}
+                                  <details className="mt-3">
+                                    <summary className="cursor-pointer list-none text-xs font-semibold tracking-wide text-secondary hover:text-primary dark:text-secondary dark:hover:text-primary">
+                                      직접 찾기 펼치기
+                                    </summary>
+                                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                                      {WAYPOINT_TYPES.map((t) => (
+                                      <Chip
+                                        key={t}
+                                        tone="emerald"
+                                        active={nearbyTypes.includes(t)}
+                                        onClick={() => {
+                                          nearbyAbort.current?.abort();
+                                          nearbyRequest.current++;
+                                          setNearbyLoading(false);
+                                          setNearby(null);
+                                          setNearbyTypes((prev) =>
+                                            prev.includes(t)
+                                              ? prev.filter((v) => v !== t)
+                                              : [...prev, t],
+                                          );
+                                        }}
+                                      >
+                                        {t === "맛집" ? "음식점" : t}
+                                      </Chip>
+                                    ))}
+                                    <button
+                                      type="button"
+                                      onClick={searchNearby}
+                                      disabled={visibleNearbyLoading || nearbyTypes.length === 0}
+                                      className="ml-1 rounded-sm bg-accent px-4 py-1 text-xs font-medium text-primary transition-colors disabled:opacity-40"
+                                    >
+                                      {visibleNearbyLoading ? "검색 중…" : "주변 검색"}
+                                    </button>
+                                  </div>
+
+                                  {visibleNearby && visibleNearby.length === 0 && (
+                                    <p className="mt-3 text-xs text-secondary dark:text-secondary">
+                                      경로 주변에서 찾은 장소가 없어요.
+                                    </p>
+                                  )}
+                                  {visibleNearby && visibleNearby.length > 0 && (
+                                    <ul className="mt-3 grid gap-2 sm:grid-cols-2">
+                                      {visibleNearby.map((p) => (
+                                        <li
+                                          key={`${p.name}|${p.address}`}
+                                          className="flex items-center justify-between gap-2 rounded-md border border-line dark:border-line bg-raised dark:bg-raised px-3 py-2"
+                                        >
+                                          <span className="min-w-0">
+                                            <span className="block truncate text-sm font-medium">
+                                              {cleanLabel(p.name)}
+                                            </span>
+                                            <span className="block truncate text-xs text-secondary dark:text-secondary">
+                                              {p.type ? cleanLabel(p.type) : p.address ? cleanLabel(p.address) : ""}
+                                            </span>
+                                          </span>
+                                          <button
+                                            type="button"
+                                            onClick={() => { if (currentPoiIdentity.current === poiIdentity) addWaypoint(p); }}
+                                            disabled={rerouting}
+                                            className="shrink-0 rounded-sm bg-accent px-3 py-1 text-xs font-medium text-primary transition-colors disabled:opacity-40"
+                                          >
+                                            + 경유
+                                          </button>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                  <form
+                                    onSubmit={searchWaypoint}
+                                    className="mt-3 flex items-center gap-2 border-t border-line dark:border-line pt-3"
+                                  >
+                                    <span className="shrink-0 text-xs text-secondary dark:text-secondary">
+                                      직접 검색
+                                    </span>
+                                    <input
+                                      value={wpQuery}
+                                      onChange={(e) => {
+                                        waypointAbort.current?.abort();
+                                        waypointRequest.current++;
+                                        setWpSearching(false);
+                                        setWpResults(null);
+                                        setWpQuery(e.target.value);
+                                      }}
+                                      placeholder="장소 이름 (예: 경포대)"
+                                      className="min-w-0 flex-1 rounded-md border border-line dark:border-line px-3 py-2 text-sm outline-none transition-colors placeholder:text-secondary dark:placeholder:text-secondary focus:border-line"
+                                    />
+                                    <button
+                                      type="submit"
+                                      disabled={wpSearching || !wpQuery.trim()}
+                                      className="shrink-0 rounded-sm bg-accent px-4 py-2 text-xs font-medium text-primary transition-colors disabled:opacity-40"
+                                    >
+                                      {wpSearching ? "검색 중…" : "검색"}
+                                    </button>
+                                  </form>
+                                  {wpResults && wpResults.length === 0 && (
+                                    <p className="mt-2 text-xs text-secondary dark:text-secondary">
+                                      검색 결과가 없어요.
+                                    </p>
+                                  )}
+                                  {wpResults && wpResults.length > 0 && (
+                                    <ul className="mt-2 grid gap-2 sm:grid-cols-2">
+                                      {wpResults.map((p) => (
+                                        <li
+                                          key={`${p.name}|${p.address}`}
+                                          className="flex items-center justify-between gap-2 rounded-md border border-line dark:border-line bg-raised dark:bg-raised px-3 py-2"
+                                        >
+                                          <span className="min-w-0">
+                                            <span className="block truncate text-sm font-medium">
+                                              {cleanLabel(p.name)}
+                                            </span>
+                                            <span className="block truncate text-xs text-secondary dark:text-secondary">
+                                              {p.address && cleanLabel(p.address)}
+                                            </span>
+                                          </span>
+                                          <button
+                                            type="button"
+                                            onClick={() => { if (currentPoiIdentity.current === poiIdentity) addWaypoint(p); }}
+                                            disabled={rerouting}
+                                            className="shrink-0 rounded-sm bg-accent px-3 py-1 text-xs font-medium text-primary transition-colors disabled:opacity-40"
+                                          >
+                                            + 경유
+                                          </button>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                    {rerouting && (
+                                      <p className="mt-2 animate-pulse text-xs text-secondary dark:text-secondary">
+                                        경유지 반영해서 재탐색 중…
+                                      </p>
+                                    )}
+                                  </details>
+                                  </div>
+                                </details>
+                              )}
+                            </div>
+                          </details>
+                        </div>
+                        <button type="button" className="gb-cta" onClick={() => void startDrive(c)}>
+                          이 코스로 출발
+                        </button>
+                      </section>
+                    );
+                  })()}
+                </div>
+              ) : null}
             </div>
           </div>,
           document.body,
@@ -2738,11 +2759,32 @@ export function Planner({
 }
 
 /**
+ * 화면에 보일 코스 이름 — 실제 지명으로 "A – B" 또는 "<지명> 해안/강변/와인딩".
+ * 서버가 준 짧은 지명(고른 종류의 가장 긴 구간 가운데, 출발에서 가장 먼 곳)을 쓴다.
+ * 방향·편도·km 같은 생성 문구는 넣지 않는다. 지명이 아직 없으면 원래 이름의 앞부분.
+ */
+function courseTitle(c: RouteCandidate, styles: DriveStyle[] = []): string {
+  const pl = c.metrics?.places;
+  // 코스 자기 종류가 먼저 — 고른 취향 전체로 정하면 해안 코스에 와인딩 이름이 붙었다(2026-11-15)
+  const kinds = specialKindsFor(c.styleTag ? [c.styleTag] : styles);
+  const KIND: Record<string, string> = { winding: "와인딩", coast: "해안", river: "강변" };
+  const kind = kinds.find((k) => pl?.[k]);
+  const main = kind ? pl?.[kind] : undefined;
+  const far = pl?.far;
+  // 이름만 보고 종류를 알 수 있게 항상 "지명 + 종류" — "A – B"는 종류가 안 보였다
+  if (main && kind) return `${main} ${KIND[kind]}`;
+  if (far) return kinds[0] ? `${far} ${KIND[kinds[0]]}` : `${far} 순환`;
+  // 지명을 못 얻었으면 원래 이름의 핵심만 — "해안도로 순환 · 서쪽 해안 · 편도 42km" → "해안도로 순환"
+  return cleanLabel(c.label.split(" · ")[0]);
+}
+
+/**
  * 카드에 보일 "추천 이유" 한 줄 — 코스 성격(강변·해안·와인딩 등) 위주로 짧게.
  * 신호 관련 문구(무신호·신호 적음)는 OSM 신호 자료가 불완전해 카드에선 뺀다.
  */
-function courseWhy(c: RouteCandidate, styles: DriveStyle[] = []): string | null {
-  // 고른 종류가 있으면 그 종류에 맞는 이유를 먼저 — 해안을 골랐는데 "와인딩 코스"로 나오지 않게
+function courseWhy(c: RouteCandidate, picked: DriveStyle[] = []): string | null {
+  // 코스 자기 종류에 맞는 이유를 먼저 — 와인딩 코스에 "강을 따라" 문구가 붙지 않게(2026-11-15)
+  const styles = c.styleTag ? [c.styleTag] : picked;
   const km = c.distanceM / 1000;
   const m = c.metrics;
   if (styles.includes("해안도로") && m && m.seaShoreRatio * km >= 1)
@@ -2758,7 +2800,8 @@ function courseWhy(c: RouteCandidate, styles: DriveStyle[] = []): string | null 
     const [hook, extra] = r.split(" — ");
     // 카드에선 쉬운 말로 — "곡률 55°/km · 와인딩 코스" 같은 수치 표현은 상세정보에만 둔다.
     const plain = hook.replace(/^곡률 \d+°\/km · 와인딩 코스$/, "굽잇길이 많은 와인딩 코스");
-    return cleanLabel(extra && !extra.includes("신호") ? `${plain} — ${extra}` : plain);
+    // 덧붙임은 괄호로 — 신호 관련 문구(무신호 등)는 쓰지 않는다
+    return cleanLabel(extra && !extra.includes("신호") ? `${plain} (${extra})` : plain);
   }
   // 풍경 배지(헤어핀·해안·해발)만 이유로 쓴다 — 단속·카메라·신호 배지는 주의 사항이지 추천 이유가 아니다.
   const b = [...(c.styleTag ? [c.styleTag] : []), ...(c.badges ?? [])].find(
@@ -2766,7 +2809,7 @@ function courseWhy(c: RouteCandidate, styles: DriveStyle[] = []): string | null 
   );
   if (b) return cleanLabel(b);
   const stops = (c.waypoints ?? []).map((w) => cleanLabel(w.name)).filter(Boolean).slice(0, 2);
-  return stops.length ? `${stops.join("·")} 경유` : null;
+  return stops.length ? `${stops.join(", ")} 경유` : null;
 }
 
 export default function Page() {

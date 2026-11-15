@@ -8,6 +8,7 @@ import { createPortal } from "react-dom";
 import { loadKakaoSdk } from "@/lib/kakao-sdk";
 import { cleanLabel } from "@/lib/display-text";
 import { curvatureSegments, distanceM } from "@/lib/scoring/curvature";
+import type { SpecialKind } from "@/lib/special-segments";
 import type { LatLng } from "@/lib/types";
 
 /**
@@ -37,6 +38,61 @@ const TRAFFIC_COLORS: Record<number, string> = {
   3: "#facc15",
   4: "#22c55e",
 };
+
+/** 굽이 지도(코스 상세) — 교통 4색 위에 코스의 특별 구간을 덧칠한다 */
+const GUBI_TRAFFIC: Record<number, string> = {
+  1: "#E8323C", // 정체
+  2: "#FF7A1A", // 지체
+  3: "#F5B700", // 서행
+  4: "#1DB954", // 원활
+};
+const GUBI_TRAFFIC_LEGEND: [string, string][] = [
+  ["#1DB954", "원활"],
+  ["#F5B700", "서행"],
+  ["#FF7A1A", "지체"],
+  ["#E8323C", "정체"],
+];
+/** 교통 정보가 없는 구간 — 원활처럼 보이지 않게 회색 */
+const GUBI_NO_TRAFFIC = "#5B6470";
+export const SPECIAL_COLOR: Record<SpecialKind, string> = {
+  winding: "#7C3AED",
+  coast: "#1D4ED8",
+  river: "#0891B2",
+};
+export const SPECIAL_NAME: Record<SpecialKind, string> = {
+  winding: "와인딩",
+  coast: "해안",
+  river: "강변",
+};
+export interface SpecialSegment {
+  kind: SpecialKind;
+  path: LatLng[];
+  km: number;
+}
+/** 코스 상세 지도 맞춤 여백 — 위 단추 줄·아래 범례만 비우고 꽉 채운다(꼬리표는 안쪽으로 접는다) */
+const GUBI_FIT_PAD = { top: 96, right: 24, bottom: 100, left: 24 };
+const CALLOUT_W = 300;
+const CALLOUT_H = 222;
+
+/** 지도 위 이름표·말풍선의 화면 상자 — 좌표 기준 가로 가운데, 세로는 dy(위로 뜨면 음수)부터 h */
+interface OverlayBox {
+  at: LatLng;
+  w: number;
+  h: number;
+  dy: number;
+}
+interface Rect {
+  l: number;
+  t: number;
+  r: number;
+  b: number;
+}
+const hits = (a: Rect, b: Rect, m = 0) => a.l < b.r + m && a.r > b.l - m && a.t < b.b + m && a.b > b.t - m;
+
+/** "와인딩 9.8km", "해안 31km" — 10km 넘으면 정수 */
+export function kmText(km: number): string {
+  return `${km >= 10 ? Math.round(km) : km.toFixed(1)}km`;
+}
 
 /** 와인딩 지수(°/km) – 파랑(직선)~핑크(와인딩) */
 export function windingColor(degPerKm: number): string {
@@ -104,6 +160,14 @@ export default function RouteMapOSM({
   poiCard,
   heightClass = "h-80",
   vehicleTouch = false,
+  variant = "classic",
+  special,
+  specialKinds,
+  stops,
+  loop = false,
+  topLeft,
+  callout,
+  calloutAt,
 }: {
   routes?: RouteLine[];
   path?: LatLng[];
@@ -120,7 +184,32 @@ export default function RouteMapOSM({
   heightClass?: string;
   /** 차량 화면: 전체화면(body 포털)에서도 큰 터치 단추 규칙을 받게 한다 */
   vehicleTouch?: boolean;
+  /** gubi: 코스 상세 지도 — 교통 4색 + 특별 구간 덧칠, 흰 테두리, 출발·경유 말풍선 */
+  variant?: "classic" | "gubi";
+  /** 덧칠할 특별 구간(와인딩·해안·강변) */
+  special?: SpecialSegment[];
+  /** 범례에 보일 특별 구간 종류(고른 길 종류) */
+  specialKinds?: SpecialKind[];
+  /** 경유지 말풍선 */
+  stops?: { name: string; coord: LatLng }[];
+  /** 순환 코스 — 출발점에 "출발·도착" */
+  loop?: boolean;
+  /** 지도 왼쪽 위에 놓을 단추(코스 목록으로 등) */
+  topLeft?: ReactNode;
+  /** 지도 위 작은 카드(로드뷰) — calloutAt 지점과 가는 선으로 잇는다 */
+  callout?: ReactNode;
+  calloutAt?: LatLng | null;
 }) {
+  const gubi = variant === "gubi";
+  /** 로드뷰 카드 자리 고르기에 쓰는 지도 위 물건들 */
+  const overlayBoxes = useRef<OverlayBox[]>([]);
+  const legendRef = useRef<HTMLDivElement>(null);
+  const zoomRef = useRef<HTMLDivElement>(null);
+  const topLeftRef = useRef<HTMLDivElement>(null);
+  const topRightRef = useRef<HTMLDivElement>(null);
+  const calloutRef = useRef<HTMLDivElement>(null);
+  /** 출발·도착 꼬리표 — 지도 끝에 걸리면 안쪽으로 밀고, 아래 범례에 걸리면 점 위로 올린다 */
+  const endTags = useRef<{ at: LatLng; box: HTMLElement; label: HTMLElement }[]>([]);
   const routeList: RouteLine[] = routes ?? (path ? [{ label: "_", path }] : []);
   const selLabel = selected ?? routeList[0]?.label;
   const selRoute = routeList.find((r) => r.label === selLabel) ?? routeList[0];
@@ -174,7 +263,7 @@ export default function RouteMapOSM({
     const b = boundsOf(selRoute ? [selRoute.path] : []);
     if (!b) return;
     map.relayout();
-    const pad = { ...(sharedMap ? FIT_PAD_SHARED : FIT_PAD_SINGLE) };
+    const pad = { ...(gubi ? GUBI_FIT_PAD : sharedMap ? FIT_PAD_SHARED : FIT_PAD_SINGLE) };
     // 작은 지도에서 여백이 화면을 다 먹지 않게 줄인다(위+아래·좌+우 합이 60%까지만)
     const el = mapEl.current;
     if (el) {
@@ -193,6 +282,28 @@ export default function RouteMapOSM({
     }
     fitGuardUntil.current = Date.now() + FIT_EVENT_GUARD_MS;
     map.setBounds(b, pad.top, pad.right, pad.bottom, pad.left);
+    // 카카오 확대 단계는 2배씩이라 빈자리가 크게 남을 수 있다 — 한 단계 더 들어가도
+    // 코스가 위 단추·아래 범례를 뺀 자리에 들어가면 한 단계 더 확대한다
+    if (gubi && el) {
+      // 카카오가 맞춤을 반영한 다음 프레임에 잰다
+      requestAnimationFrame(() => {
+        if (mapRef.current !== map || map.getLevel() <= 1) return;
+        const proj = map.getProjection();
+        if (!proj) return;
+        const sw = proj.containerPointFromCoords(b.getSouthWest());
+        const ne = proj.containerPointFromCoords(b.getNorthEast());
+        const w = Math.abs(ne.x - sw.x);
+        const h = Math.abs(sw.y - ne.y);
+        if (w * 2 <= el.clientWidth - pad.left - pad.right && h * 2 <= el.clientHeight - pad.top - pad.bottom) {
+          const c = new window.kakao.maps.LatLng((b.getSouthWest().getLat() + b.getNorthEast().getLat()) / 2, (b.getSouthWest().getLng() + b.getNorthEast().getLng()) / 2);
+          fitGuardUntil.current = Date.now() + FIT_EVENT_GUARD_MS;
+          map.setLevel(map.getLevel() - 1);
+          map.setCenter(c);
+          // 위·아래 여백이 다르니 코스 가운데를 남는 자리 가운데로
+          map.panBy(0, (pad.bottom - pad.top) / 2);
+        }
+      });
+    }
     markZoomed(false);
   };
   const fitRef = useRef(fitSelected);
@@ -275,6 +386,114 @@ export default function RouteMapOSM({
       const ov = new k.CustomOverlay({ map, position: ll(pos), content, xAnchor: 0.5, yAnchor, zIndex: z });
       overlays.current.push(ov);
     };
+
+    const tag = (text: string, css: string) => {
+      const d = document.createElement("div");
+      d.textContent = text;
+      d.style.cssText = css;
+      return d;
+    };
+    if (gubi) {
+      const fp = selRoute.path;
+      // 흰 테두리 → 교통 4색 → 특별 구간 덧칠
+      line(fp, "#FFFFFF", full ? 13 : 11, 1, 4);
+      const samples = selRoute.trafficSamples ?? [];
+      for (const seg of curvatureSegments(fp, 1000)) {
+        if (seg.path.length < 2) continue;
+        let color = GUBI_NO_TRAFFIC;
+        if (samples.length) {
+          const mid = seg.path[Math.floor(seg.path.length / 2)];
+          const probes = [seg.path[0], mid, seg.path[seg.path.length - 1]];
+          let state = 0;
+          let bestD = TRAFFIC_MATCH_M;
+          for (const sm of samples) for (const q of probes) {
+            const d = distanceM(q, sm);
+            if (d < bestD) { bestD = d; state = sm.state; }
+          }
+          color = GUBI_TRAFFIC[state] ?? GUBI_NO_TRAFFIC;
+        }
+        line(seg.path, color, full ? 7 : 6, 1, 5);
+      }
+      for (const sp of special ?? []) if (sp.path.length > 1) line(sp.path, SPECIAL_COLOR[sp.kind], full ? 8 : 7, 1, 6);
+      // 이름표 — 알약 + 점. 가까이 붙은 같은 종류 구간은 한 이름표에 길이를 합치고, 이름표는 3개까지
+      const labels: { kind: SpecialKind; at: LatLng; km: number }[] = [];
+      const isLoopRoute = loop || distanceM(fp[0], fp[fp.length - 1]) < 300;
+      const markers: LatLng[] = [fp[0], ...(isLoopRoute ? [] : [fp[fp.length - 1]]), ...(stops ?? []).map((st) => st.coord), ...(calloutAt ? [calloutAt] : [])];
+      for (const sp of [...(special ?? [])].sort((a, b) => b.km - a.km)) {
+        if (sp.path.length < 2) continue;
+        // 구간 가운데쯤(20~80%)에서 출발·경유·로드뷰 점과 가장 먼 곳에 이름표를 단다
+        let mid = sp.path[Math.floor(sp.path.length / 2)];
+        let bestGap = -1;
+        const n = sp.path.length;
+        for (let i = Math.floor(n * 0.2); i <= Math.floor(n * 0.8); i += Math.max(1, Math.floor(n / 24))) {
+          const gap = markers.length ? Math.min(...markers.map((m) => distanceM(m, sp.path[i]))) : 0;
+          if (gap > bestGap) {
+            bestGap = gap;
+            mid = sp.path[i];
+          }
+        }
+        const near = labels.find((l) => l.kind === sp.kind && sp.path.some((q, i) => i % 10 === 0 && distanceM(q, l.at) < 8000));
+        if (near) near.km += sp.km;
+        else if (labels.length < 3) labels.push({ kind: sp.kind, at: mid, km: sp.km });
+      }
+      const placed: OverlayBox[] = [];
+      for (const sp of labels) {
+        const at = sp.at;
+        // 경유지 말풍선(위로 뜸)과 겹치지 않게, 가까이 경유지가 있으면 이름표를 점 아래로
+        // 로드뷰 점이 바로 북쪽에 있으면 이름표가 그 점과 선을 덮지 않게 역시 아래로
+        const under =
+          (stops ?? []).some((st) => distanceM(st.coord, at) < 8000) ||
+          (!!calloutAt && calloutAt.lat > at.lat && distanceM(calloutAt, at) < 8000);
+        const text = `${SPECIAL_NAME[sp.kind]} ${kmText(sp.km)}`;
+        placed.push({ at, w: text.length * 15 + 36, h: 62, dy: under ? 0 : -62 });
+        const box = document.createElement("div");
+        box.style.cssText = `display:flex;flex-direction:${under ? "column-reverse" : "column"};align-items:center;gap:6px;transform:translateY(${under ? -8 : 8}px);pointer-events:none`;
+        box.appendChild(tag(`${SPECIAL_NAME[sp.kind]} ${kmText(sp.km)}`, `background:${SPECIAL_COLOR[sp.kind]};color:#fff;font:700 17px Pretendard,-apple-system,sans-serif;padding:7px 14px;border-radius:12px;white-space:nowrap;box-shadow:0 2px 6px #0004;border:2px solid #fff`));
+        box.appendChild(tag("", "width:14px;height:14px;border-radius:50%;background:#101113;border:3px solid #fff;box-shadow:0 1px 3px #0006"));
+        html(at, box, 12, under ? 0 : 1);
+      }
+      // 경유지 — 흰 말풍선(이름 + 작은 "경유")
+      for (const st of (stops ?? []).slice(0, 8)) {
+        placed.push({ at: st.coord, w: cleanLabel(st.name).length * 17 + 70, h: 64, dy: -64 });
+        const box = document.createElement("div");
+        box.style.cssText = "display:flex;flex-direction:column;align-items:center;gap:6px;transform:translateY(7px);pointer-events:none";
+        const b = tag("", "display:flex;align-items:baseline;gap:6px;background:#fff;color:#101113;font:700 17px Pretendard,-apple-system,sans-serif;padding:8px 14px;border-radius:12px;white-space:nowrap;max-width:240px;overflow:hidden;text-overflow:ellipsis;box-shadow:0 2px 8px #0003");
+        b.appendChild(document.createTextNode(cleanLabel(st.name)));
+        b.appendChild(tag("경유", "font:500 13px Pretendard,-apple-system,sans-serif;color:#6b7078"));
+        box.appendChild(b);
+        box.appendChild(tag("", "width:14px;height:14px;border-radius:50%;background:#fff;border:3px solid #101113"));
+        html(st.coord, box, 11, 1);
+      }
+      // 출발(·도착) — 검은 점 + 검은 꼬리표
+      const endMark = (p: LatLng, text: string) => {
+        const box = document.createElement("div");
+        box.style.cssText = "display:flex;flex-direction:column;align-items:center;gap:8px;transform:translateY(-9px);pointer-events:none";
+        box.appendChild(tag("", "width:18px;height:18px;border-radius:50%;background:#101113;border:3.5px solid #fff;box-shadow:0 1px 4px #0006"));
+        const label = tag(text, "background:#101113;color:#fff;font:700 17px Pretendard,-apple-system,sans-serif;padding:6px 12px;border-radius:10px;white-space:nowrap");
+        box.appendChild(label);
+        html(p, box, 13, 0);
+        endTags.current.push({ at: p, box, label });
+      };
+      endTags.current = [];
+      endMark(fp[0], isLoopRoute ? "출발·도착" : "출발");
+      placed.push({ at: fp[0], w: 120, h: 70, dy: -12 });
+      if (!isLoopRoute) {
+        endMark(fp[fp.length - 1], "도착");
+        placed.push({ at: fp[fp.length - 1], w: 120, h: 70, dy: -12 });
+      }
+      overlayBoxes.current = placed;
+      if (calloutAt) {
+        html(calloutAt, tag("", "width:14px;height:14px;border-radius:50%;background:#101113;border:3px solid #fff;box-shadow:0 1px 3px #0006;pointer-events:none"), 14);
+      }
+      for (const sp of (pois ?? []).slice(0, 24)) {
+        const kind = SPOT_LABEL[sp.type ?? ""];
+        const spName = cleanLabel(sp.name);
+        const d = tag(kind && kind !== "위치" ? `${kind} ${spName}` : spName, "background:#fff;color:#0f766e;border:1.5px solid #0d9488;font:600 14px Pretendard,-apple-system,sans-serif;padding:4px 10px;border-radius:10px;white-space:nowrap;max-width:240px;overflow:hidden;text-overflow:ellipsis;cursor:pointer");
+        d.onclick = (e) => { e.stopPropagation(); latest.current.onPoiClick?.(sp.name); };
+        html(sp.coord, d, 10);
+      }
+      return;
+    }
 
     for (const r of routeList) {
       if (r.label === selLabel || r.path.length < 2) continue;
@@ -359,7 +578,117 @@ export default function RouteMapOSM({
       html(sp.coord, d, 10);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapGen, routes, path, selLabel, colorMode, coastOverlay, roadHighlight, pois, full, sharedMap]);
+  }, [mapGen, routes, path, selLabel, colorMode, coastOverlay, roadHighlight, pois, full, sharedMap, gubi, special, stops, loop, calloutAt]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map || !gubi) return;
+    const k = window.kakao.maps;
+    const fitTags = () => {
+      const proj = map.getProjection();
+      const el = mapEl.current;
+      if (!proj || !el) return;
+      const W = el.clientWidth;
+      const H = el.clientHeight;
+      const legend = legendRef.current?.getBoundingClientRect();
+      const base = el.getBoundingClientRect();
+      const legendTop = legend ? legend.top - base.top : H;
+      const legendRight = legend ? legend.right - base.left : 0;
+      for (const t of endTags.current) {
+        const p = proj.containerPointFromCoords(new k.LatLng(t.at.lat, t.at.lng));
+        const w = t.label.offsetWidth || 110;
+        const dx = Math.min(0, W - 12 - (p.x + w / 2)) + Math.max(0, 12 - (p.x - w / 2));
+        const below = p.y + 60;
+        const flip = below > H - 8 || (below > legendTop - 6 && p.x - w / 2 < legendRight);
+        t.label.style.transform = `translateX(${Math.round(dx)}px)`;
+        t.box.style.flexDirection = flip ? "column-reverse" : "column";
+        // 꼬리표를 점 위로 — 상자 아래끝(점)이 좌표에 오게 올린다
+        t.box.style.transform = flip ? "translateY(calc(-100% + 9px))" : "translateY(-9px)";
+      }
+    };
+    const timer = setTimeout(fitTags, 50);
+    k.event.addListener(map, "idle", fitTags);
+    return () => {
+      clearTimeout(timer);
+      k.event.removeListener(map, "idle", fitTags);
+    };
+  }, [mapGen, ready, gubi, routes, special, stops, calloutAt, full]);
+
+  // 지도 위 로드뷰 카드 — 지도가 멈출 때마다 빈자리를 골라 놓고(코스 선·범례·확대 단추·
+  // 이름표를 피하고 지점에 가깝게), 움직이는 동안은 지점 쪽 선 끝만 따라간다
+  const [callLayout, setCallLayout] = useState<{ x: number; y: number; w: number; h: number; ch: number; left: number; top: number } | null>(null);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map || !calloutAt || !gubi) {
+      setCallLayout(null);
+      return;
+    }
+    const k = window.kakao.maps;
+    const pos = new k.LatLng(calloutAt.lat, calloutAt.lng);
+    const place = (spotOnly: boolean) => {
+      const proj = map.getProjection();
+      const el = mapEl.current;
+      if (!proj || !el) return;
+      const W = el.clientWidth;
+      const H = el.clientHeight;
+      const sp = proj.containerPointFromCoords(pos);
+      if (spotOnly) {
+        setCallLayout((prev) => (prev ? { ...prev, x: sp.x, y: sp.y } : prev));
+        return;
+      }
+      const base = el.getBoundingClientRect();
+      const rel = (n: HTMLElement | null): Rect | null => {
+        if (!n) return null;
+        const r = n.getBoundingClientRect();
+        return { l: r.left - base.left, t: r.top - base.top, r: r.right - base.left, b: r.bottom - base.top };
+      };
+      const hard = [legendRef.current, zoomRef.current, topLeftRef.current, topRightRef.current].map(rel).filter((r): r is Rect => !!r);
+      const soft = overlayBoxes.current.map((o) => {
+        const p = proj.containerPointFromCoords(new k.LatLng(o.at.lat, o.at.lng));
+        return { l: p.x - o.w / 2, t: p.y + o.dy, r: p.x + o.w / 2, b: p.y + o.dy + o.h };
+      });
+      const path = latest.current.selPath ?? [];
+      const step = Math.max(1, Math.floor(path.length / 300));
+      const pts: { x: number; y: number }[] = [];
+      for (let i = 0; i < path.length; i += step) pts.push(proj.containerPointFromCoords(new k.LatLng(path[i].lat, path[i].lng)));
+      const CW = CALLOUT_W;
+      const CH = calloutRef.current?.offsetHeight || CALLOUT_H;
+      let best: { left: number; top: number; cost: number } | null = null;
+      for (let top = 16; top <= H - CH - 16; top += 24) {
+        for (let left = 16; left <= W - CW - 16; left += 24) {
+          const rc: Rect = { l: left, t: top, r: left + CW, b: top + CH };
+          if (hard.some((h) => hits(rc, h, 12))) continue;
+          if (hits(rc, { l: sp.x, t: sp.y, r: sp.x, b: sp.y }, 28)) continue;
+          let cost = 0;
+          for (const o of soft) if (hits(rc, o, 8)) cost += 1e5;
+          for (const q of pts) if (q.x > rc.l - 10 && q.x < rc.r + 10 && q.y > rc.t - 10 && q.y < rc.b + 10) cost += 60;
+          // 선 끝 — 카드 테두리에서 지점에 가장 가까운 곳. 선이 이름표를 지나가면 벌점
+          const ex = Math.max(rc.l, Math.min(sp.x, rc.r));
+          const ey = Math.max(rc.t, Math.min(sp.y, rc.b));
+          for (let t = 0.1; t < 1; t += 0.1) {
+            const lx = sp.x + (ex - sp.x) * t;
+            const ly = sp.y + (ey - sp.y) * t;
+            if (soft.some((o) => lx > o.l && lx < o.r && ly > o.t && ly < o.b)) cost += 3e4;
+          }
+          cost += Math.hypot(ex - sp.x, ey - sp.y) * 0.4;
+          if (!best || cost < best.cost) best = { left, top, cost };
+        }
+      }
+      const fb = { left: 16, top: Math.max(16, H - CH - 120) };
+      setCallLayout({ x: sp.x, y: sp.y, w: W, h: H, ch: CH, left: (best ?? fb).left, top: (best ?? fb).top });
+    };
+    const onMove = () => place(true);
+    const onIdle = () => place(false);
+    // 그리기·맞춤이 끝난 다음에 고른다
+    const t = setTimeout(onIdle, 300);
+    k.event.addListener(map, "bounds_changed", onMove);
+    k.event.addListener(map, "idle", onIdle);
+    return () => {
+      clearTimeout(t);
+      k.event.removeListener(map, "bounds_changed", onMove);
+      k.event.removeListener(map, "idle", onIdle);
+    };
+  }, [mapGen, calloutAt, ready, gubi, special, stops]);
 
   // 시점: 지도 생성(처음·전체화면 전환)·경로 집합 변경·선택 코스 변경 때마다 선택 코스에 맞춘다
   useEffect(() => {
@@ -379,7 +708,7 @@ export default function RouteMapOSM({
 
   const canvasEl = (
     <>
-      <div ref={mapEl} className={`absolute inset-0 bg-panel ${full ? "" : "rounded-md"} overflow-hidden`} />
+      <div ref={mapEl} className={`absolute inset-0 bg-panel ${full || gubi ? "" : "rounded-md"} overflow-hidden`} />
       {(!ready || error) && (
         <div className="absolute inset-0 flex items-center justify-center rounded-md bg-panel text-sm text-secondary">
           {error ? "지도를 불러오지 못했어요" : "지도 불러오는 중…"}
@@ -420,7 +749,82 @@ export default function RouteMapOSM({
     </div>
   ) : null;
 
-  const controls = (
+  const kindsInLegend = [...new Set([...(specialKinds ?? []), ...(special ?? []).map((sp) => sp.kind)])];
+  const gubiLegend = gubi && (showTrafficLegendGubi(selRoute) || kindsInLegend.length > 0) ? (
+    <div ref={legendRef} data-gubi-legend className="gb-map-legend">
+      {showTrafficLegendGubi(selRoute) && GUBI_TRAFFIC_LEGEND.map(([c, t]) => (
+        <span key={t}><i style={{ background: c }} />{t}</span>
+      ))}
+      {showTrafficLegendGubi(selRoute) && kindsInLegend.length > 0 && <b aria-hidden="true" />}
+      {kindsInLegend.map((kd) => (
+        <span key={kd}><i style={{ background: SPECIAL_COLOR[kd] }} />{SPECIAL_NAME[kd]}</span>
+      ))}
+    </div>
+  ) : null;
+
+  const calloutEl = gubi && callout ? (
+    <>
+      {callLayout && callLayout.x >= 0 && callLayout.y >= 0 && callLayout.x <= callLayout.w && callLayout.y <= callLayout.h && (
+        <svg className="pointer-events-none absolute inset-0 z-10 h-full w-full" aria-hidden="true">
+          <line
+            x1={callLayout.x}
+            y1={callLayout.y}
+            x2={Math.max(callLayout.left, Math.min(callLayout.x, callLayout.left + CALLOUT_W))}
+            y2={Math.max(callLayout.top, Math.min(callLayout.y, callLayout.top + callLayout.ch))}
+            stroke="#101113"
+            strokeWidth="2"
+          />
+        </svg>
+      )}
+      <div
+        ref={calloutRef}
+        data-map-callout
+        className="absolute z-20"
+        style={callLayout ? { left: callLayout.left, top: callLayout.top, width: CALLOUT_W } : { left: 16, top: 96, width: CALLOUT_W, visibility: "hidden" }}
+      >
+        {callout}
+      </div>
+    </>
+  ) : null;
+
+  const gubiControls = (
+    <>
+      {topLeft && <div ref={topLeftRef} className="absolute left-4 top-4 z-20">{topLeft}</div>}
+      <div ref={topRightRef} className="absolute right-4 top-4 z-20 flex gap-2">
+        {zoomed && (
+          <button
+            type="button"
+            data-map-fit=""
+            onClick={(e) => {
+              e.stopPropagation();
+              fitSelected();
+            }}
+            className="gb-map-btn"
+          >
+            전체 보기
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setFull((v) => !v);
+          }}
+          aria-label={full ? "전체화면 닫기" : "전체화면"}
+          className="gb-map-btn"
+        >
+          {full ? "닫기" : "전체화면"}
+        </button>
+      </div>
+      <div ref={zoomRef} className="gb-map-zoom absolute bottom-10 right-4 z-20 flex flex-col overflow-hidden">
+        <button type="button" onClick={(e) => bumpZoom(1)(e)} aria-label="확대">＋</button>
+        <button type="button" onClick={(e) => bumpZoom(-1)(e)} aria-label="축소">－</button>
+      </div>
+      {calloutEl}
+    </>
+  );
+
+  const controls = gubi ? gubiControls : (
     <>
       <button
         type="button"
@@ -490,10 +894,10 @@ export default function RouteMapOSM({
       >
         <div className="relative min-h-0 flex-1 overflow-hidden rounded-md">
           {canvasEl}
-          {!poiCard && legend}
+          {!poiCard && (gubi ? gubiLegend : legend)}
           {controls}
           {poiCard && (
-            <div className="absolute inset-x-3 bottom-3 z-20 mx-auto max-w-md">{poiCard}</div>
+            <div className="absolute inset-x-3 bottom-3 z-30 mx-auto max-w-md">{poiCard}</div>
           )}
         </div>
       </div>,
@@ -504,9 +908,13 @@ export default function RouteMapOSM({
   return (
     <div className={`relative min-h-0 min-w-0 ${heightClass}`} onClick={(e) => e.stopPropagation()}>
       {canvasEl}
-      {!poiCard && legend}
+      {!poiCard && (gubi ? gubiLegend : legend)}
       {controls}
-      {poiCard && <div className="absolute inset-x-2 bottom-2 z-20">{poiCard}</div>}
+      {poiCard && <div className="absolute inset-x-2 bottom-2 z-30">{poiCard}</div>}
     </div>
   );
+}
+
+function showTrafficLegendGubi(route: RouteLine | undefined): boolean {
+  return !!route?.trafficSamples?.length;
 }

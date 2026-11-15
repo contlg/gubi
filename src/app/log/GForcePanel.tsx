@@ -241,7 +241,8 @@ export default function GForcePanel({
       data-g-lat={live.lat.toFixed(3)}
       data-g-lon={live.lon.toFixed(3)}
       data-g-mode={sensor?.ready ? "sensor" : "gps"}
-      className={`pointer-events-none fixed right-0 top-1/2 z-50 flex max-h-[calc(100dvh-16px)] -translate-y-1/2 items-start transition-transform duration-300 ${
+      data-g-panel
+      className={`pointer-events-none fixed right-0 top-1/2 z-50 flex max-h-[calc(100dvh-16px)] -translate-y-1/2 items-start ${
         open ? "translate-x-0" : "translate-x-[calc(100%-64px)]"
       }`}
     >

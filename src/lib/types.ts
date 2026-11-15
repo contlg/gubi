@@ -84,6 +84,16 @@ export interface CoastSample {
   tier: 1 | 2;
 }
 
+/** 코스 위 특별 구간 — 출발부터 거리(m) [시작, 끝] 목록. 지도 색칠·구간 길이 표시용 */
+export interface SpecialRanges {
+  /** 굽잇길 재고(곡률 150°/km 이상) 30m 안을 달리는 구간 */
+  winding: [number, number][];
+  /** 해안선 150m 안(바닷가 길) 구간 */
+  coast: [number, number][];
+  /** 강변길 재고 30m 안 구간 */
+  river: [number, number][];
+}
+
 export interface RouteMetrics {
   /** 바닷가에 붙은(해안선 250m 이내) 구간 비율 (0~1) */
   seaShoreRatio: number;
@@ -101,6 +111,10 @@ export interface RouteMetrics {
   tunnelRatio: number;
 
   bridgeCount: number;
+  /** 특별 구간(와인딩·해안·강변) — 예전 캐시 응답엔 없을 수 있다 */
+  special?: SpecialRanges;
+  /** 코스 이름용 짧은 지명(행정동 기준, 예 "송도", "청평") — 출발에서 가장 먼 곳, 종류별 가장 긴 구간 가운데 */
+  places?: { far?: string; winding?: string; coast?: string; river?: string };
 }
 
 export interface RouteCandidate {

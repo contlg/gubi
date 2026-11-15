@@ -41,7 +41,7 @@ export default function NavMapNative(props: NavMapProps) {
   const [following, setFollowing] = useState(true);
   const [tilt, setTilt] = useState(true);
   const [headingUp, setHeadingUp] = useState(true);
-  const routeKey = useMemo(() => JSON.stringify(nativeMapRouteData(props)), [props.path, props.traffic]);
+  const routeKey = useMemo(() => JSON.stringify(nativeMapRouteData(props)), [props.path, props.traffic, props.special]);
   const detailsKey = useMemo(() => JSON.stringify({ cams: props.cams, maneuvers: props.maneuvers }), [props.cams, props.maneuvers]);
   const traceKey = useMemo(() => JSON.stringify({ trace: nativeMapTrace(props.trace) }), [props.trace]);
   const fixKey = JSON.stringify({ ...props.pos, heading: props.heading, kmh: props.kmh, zoom: kakaoZoom(props.kmh, typeof window !== "undefined" && typeof window.DriveNative?.startPleosCourse === "function" ? -1 : 0),

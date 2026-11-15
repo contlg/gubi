@@ -26,7 +26,10 @@ export function stripEmoji(text: string): string {
 /** "A · B · C" → "A (B, C)" — 가운뎃점 나열 대신 핵심 + 괄호 추가 정보(유저, 2026-11-14) */
 function parenize(text: string): string {
   const parts = text.split(" · ").map((t) => t.trim()).filter(Boolean);
-  return parts.length > 1 ? `${parts[0]} (${parts.slice(1).join(", ")})` : text;
+  // 괄호 안 덧붙임의 붙은 가운뎃점("호반·물가")도 쉼표로 — 나열을 가운뎃점으로 잇지 않는다
+  return parts.length > 1
+    ? `${parts[0]} (${parts.slice(1).map((p) => p.replace(/\s*·\s*/g, ", ")).join(", ")})`
+    : text;
 }
 
 export function cleanLabel(label: string): string {

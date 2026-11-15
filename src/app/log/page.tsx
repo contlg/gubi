@@ -5,7 +5,7 @@ import { sanitizeVehicleRecord, type VehicleRecord } from "@/lib/vehicle-trace";
 import { BORROW_SERVER, LOCAL_RECORDS_KEY, LOCAL_USER_NAME, installBorrowFetchGuard, localOwnerSeed, withBasePath } from "@/lib/borrow-mode";
 import { loadSecureJsonQueued, readSecureJson, sealJson, secureDepsFor, updateSecureJson, writeSecureJson } from "@/lib/secure-store";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   IconSound,
@@ -59,6 +59,7 @@ import { TripCard } from "./TripCard";
 import GForcePanel, { G_BINS, GForceRecord, pushEnv, type GLive, type GPeaks } from "./GForcePanel";
 import NavMap from "./NavMapKakao";
 import NavMapNative, { useNativeNavMap } from "./NavMapNative";
+import { CourseBar, SpecialNow, specialPaint, useDriveSpecial } from "./drive-special";
 import type { NativeNavMapBridge } from "@/lib/native-nav-map";
 import dynamic from "next/dynamic";
 // 개발 서버(NEXT_PUBLIC_MAP_GL=1 빌드)만 새 벡터 지도(MapLibre). 실제 서버 빌드엔 안 쓰인다.
@@ -408,6 +409,35 @@ async function startSocial(provider: "kakao" | "google", link: boolean): Promise
 const fmtM = (m: number) =>
   m >= 950 ? `${(m / 1000).toFixed(1)}km` : `${Math.max(0, Math.round(m / 10) * 10)}m`;
 
+/** 주행 화면 큰 숫자 — 숫자는 크게, 단위는 작게 */
+function bigM(m: number): React.ReactNode {
+  return m >= 950
+    ? <>{(m / 1000).toFixed(1)}<small>km</small></>
+    : <>{Math.max(0, Math.round(m / 10) * 10)}<small>m</small></>;
+}
+function bigDur(sec: number, withSec = false): React.ReactNode {
+  const total = Math.max(0, Math.floor(sec));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  if (h > 0) return <>{h}<small>시간</small> {m}<small>분</small></>;
+  if (withSec) return m > 0 ? <>{m}<small>분</small> {total % 60}<small>초</small></> : <>{total}<small>초</small></>;
+  return <>{Math.max(1, Math.round(total / 60))}<small>분</small></>;
+}
+/** 걸린 시간(글) — "1시간 5분" / "12분" / "43초" */
+function durText(sec: number): string {
+  const total = Math.max(0, Math.round(sec));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  if (h > 0) return m > 0 ? `${h}시간 ${m}분` : `${h}시간`;
+  return m > 0 ? `${m}분` : `${total}초`;
+}
+/** 지금부터 sec초 뒤 시각 — "오후" 작게, "3:47" 크게 */
+function bigClock(sec: number): React.ReactNode {
+  const d = new Date(Date.now() + sec * 1000);
+  const h = d.getHours();
+  return <><small className="drv-ap">{h < 12 ? "오전" : "오후"}</small>{h % 12 === 0 ? 12 : h % 12}:{String(d.getMinutes()).padStart(2, "0")}</>;
+}
+
 /** 주행 화면 코스 진행 띠 — 다음 경유지 이름·거리, 남은 코스 거리·시간. */
 function CourseStrip({ vias, pos, remainM, remainSec, fallbackM }: {
   vias: DrivePlanVia[]; pos: LatLng | null; remainM?: number; remainSec?: number; fallbackM?: number;
@@ -426,20 +456,16 @@ function CourseStrip({ vias, pos, remainM, remainSec, fallbackM }: {
   const remain = remainM ?? fallbackM;
   if (!next && remain == null) return null;
   return (
-    <div data-over-map className="mt-2 flex items-center gap-3 rounded-md bg-panel px-4 py-2 text-primary">
-      {next ? (
-        <span className="min-w-0 flex-1 truncate text-[15px] font-semibold">
-          다음 경유 {next.name || `${nextIdx + 1}번`}
-          {toNext != null && <span className="ml-2 tabular-nums text-secondary">{fmtM(toNext)}</span>}
-        </span>
-      ) : (
-        <span className="min-w-0 flex-1 truncate text-[15px] font-semibold">마지막 구간</span>
-      )}
+    <div data-course-strip className="drv-course">
+      <p className="drv-line">
+        <b className="min-w-0 truncate">{next ? `다음 경유 ${next.name || `${nextIdx + 1}번`}` : "마지막 구간"}</b>
+        {next && toNext != null && <span className="shrink-0">({fmtM(toNext)})</span>}
+      </p>
       {remain != null && (
-        <span className="shrink-0 text-[13px] tabular-nums text-secondary">
+        <p className="drv-course-sub">
           남은 코스 {fmtM(Math.max(0, remain))}
           {remainSec != null && remainSec > 0 ? ` (${fmtEtaDur(remainSec)})` : ""}
-        </span>
+        </p>
       )}
     </div>
   );
@@ -515,10 +541,6 @@ function bearing8(
   const deg =
     (Math.atan2((to.lng - from.lng) * kx, to.lat - from.lat) * 180) / Math.PI;
   return DIR8[Math.round(((deg + 360) % 360) / 45) % 8];
-}
-
-function fmtSpeed(kmh: number, _mode?: string): string {
-  return `${kmh}km/h`;
 }
 
 /** 목록 날짜 머리말 — 오늘·어제·올해는 "10월 19일 일요일", 지난해는 연도까지 */
@@ -1210,7 +1232,6 @@ export default function FundrivePage() {
     if (phase === "idle" || phase === "done") setResumeAsk(false);
   }, [phase]);
   // 주행 화면 위·아래 띠의 실제 높이 — 안내/기록 두 화면은 동시에 뜨지 않아 함께 쓴다
-  const [overTopRef, overTopH] = useMeasuredHeight();
   const [overBottomRef, overBottomH] = useMeasuredHeight();
   // 개발 서버: 새 지도(기본) – 옛 지도
   const [glMap, setGlMap] = useState(MAP_GL_BUILD);
@@ -5043,6 +5064,14 @@ export default function FundrivePage() {
   // 경로·회전·단속·제한속도 안내는 이 앱이 안내 주인일 때("local")만 보인다.
   // 기록만 시작·현대 내비 안내·준비/실패 중에는 현대 회전 배너·단속 카드도 띄우지 않는다.
   const routeGuideShown = guideMode === "local";
+  // 코스 주행이면 경로의 특별 구간(와인딩·해안·강변)을 받아 지도와 정보 칸에 보인다
+  const driveSpecial = useDriveSpecial(
+    driving && navReady && navEng.current && activePlanRef.current && !activePlanRef.current.standalone
+      ? navEng.current.path
+      : null,
+    driving && routeGuideShown,
+  );
+  const driveSpecialPaint = useMemo(() => specialPaint(driveSpecial), [driveSpecial]);
   const devCompare = useDevCompare(
     devOn && compareOn && driving,
     navReady && navEng.current ? navPos : livePos,
@@ -5262,7 +5291,7 @@ export default function FundrivePage() {
         <button type="button" className="mt-2 text-sm" onClick={() => setNotificationNotice(null)}>닫기</button>
       </div>}
       {/* 주행 중엔 아래 단추 줄(재탐색·경로 취소·일시중지·주행 종료) 위에 띄운다 — 덮으면 주행을 끝낼 수 없다. */}
-      {resumeAsk && driving && <div data-over-map role="status" className="fixed left-4 right-4 z-[91] rounded-md bg-panel p-4 text-primary"
+      {resumeAsk && driving && <div data-over-map role="status" className="drv-toast fixed left-4 right-4 z-[91] rounded-md bg-panel p-4 text-primary"
         style={{ bottom: overBottomH ? overBottomH + 8 : 16 }}>
         <p>앱이 다시 켜졌어요. 이 코스를 현대 내비로 다시 안내할까요?</p>
         <div className="mt-2 flex gap-2">
@@ -5282,7 +5311,7 @@ export default function FundrivePage() {
           }}>기록만 계속</button>
         </div>
       </div>}
-      {guideFailure && <div data-over-map role="status" className="fixed left-4 right-4 z-[90] rounded-md bg-panel p-4 text-primary"
+      {guideFailure && <div data-over-map role="status" className={`${driving ? "drv-toast " : ""}fixed left-4 right-4 z-[90] rounded-md bg-panel p-4 text-primary`}
         style={{ bottom: driving && overBottomH ? overBottomH + 8 : 16 }}>
         <p>{guideFailure}</p>
         <div className="mt-2 flex gap-2">
@@ -5323,7 +5352,15 @@ export default function FundrivePage() {
         </div>
       )}
       <div data-app-frame className="mx-auto flex min-h-screen log-content-width flex-col px-6 py-8">
-        <header>
+        <header data-app-top>
+          {phase === "idle" && !uxBlocked && tab === "course" ? (
+          <h1 data-gubi-mark className="flex items-center gap-3 text-[28px] font-bold leading-none tracking-[-0.02em]">
+            <svg width="32" height="32" viewBox="0 0 30 30" aria-hidden="true">
+              <path d="M4 24c6 0 6-9 11-9s5-9 11-9" fill="none" stroke="#F5C542" strokeWidth="3.6" strokeLinecap="round" />
+            </svg>
+            굽이
+          </h1>
+          ) : (
           <h1 className="text-[1.9rem] font-bold leading-none tracking-[-0.03em] text-primary">
             {phase !== "idle" || uxBlocked
               ? "Gubi"
@@ -5337,12 +5374,13 @@ export default function FundrivePage() {
                         ? "내가 달린 지도"
                         : "프로필"}
           </h1>
+          )}
         </header>
 
         {driving && !recordOnlyScreen && navReady && navEng.current && (
-          <div data-native-driving className="fixed inset-0 z-40 bg-bg">
-            {/* 전체화면 지도 — 컨트롤은 배너/정보바에 안 가리게 밀어둔다 */}
-            <div className="absolute inset-0">
+          <div data-native-driving data-drv className="drv fixed inset-0 z-40">
+            {/* 왼쪽 지도 — 주행 정보는 오른쪽 칸에 모아 지도를 가리지 않는다 */}
+            <div className="drv-map">
               <NavMapAny
                 engineToggle={engineToggle}
                 path={navEng.current.path}
@@ -5356,62 +5394,34 @@ export default function FundrivePage() {
                 compare={devCompare}
                 offRoute={!!navSt?.offRoute}
                 traffic={navTraffic ?? undefined}
+                special={driveSpecialPaint}
                 // 안내 중에도 '실제로 달려온 길'을 함께 그린다 — 경로에서
                 // 벗어났을 때 어디로 왔는지 보인다(경로가 위에 덧그려짐).
                 trace={recTrace}
-                insetTop={overTopH ?? (activePlanRef.current?.vias?.length ? 140 : 84)}
-                insetBottom={overBottomH ?? (hasActiveDwell ? 190 : 150)}
+                insetTop={0}
+                insetBottom={0}
                 fullBleed
               />
             </div>
 
-            {/* 상단 회전 안내 배너 (오버레이) */}
-            <div ref={overTopRef} data-over-map className="absolute inset-x-0 top-0 p-3">
+            {/* 오른쪽 정보 칸 — 다음 회전, 속도·남은 거리·도착, 코스 진행, 큰 단추 */}
+            <aside data-over-map className="drv-panel">
               <div
-                className={`flex items-center gap-3 rounded-md px-4 py-3 text-primary  ${
-                  navSt?.arrived
-                    ? "bg-ok-surface"
-                    : navSt?.offRoute
-                      ? "bg-warn-surface"
-                      : "bg-panel"
-                }`}
+                data-drv-turn
+                className={`drv-turn ${navSt?.arrived ? "is-ok" : navSt?.offRoute ? "is-warn" : ""}`}
               >
-                <button
-                  type="button"
-                  onClick={() =>
-                    setVoiceOn((v) => {
-                      try {
-                        localStorage.setItem(
-                          "drivelog-nav-voice-v1",
-                          v ? "off" : "on",
-                        );
-                      } catch {}
-                      if (v) window.speechSynthesis?.cancel?.();
-                      return !v;
-                    })
-                  }
-                  className="shrink-0 rounded-md bg-overlay px-2 py-1 text-lg"
-                  aria-label={voiceOn ? "음성 안내 끄기" : "음성 안내 켜기"}
-                  aria-pressed={voiceOn}
-                >
-                  <IconSound on={voiceOn} />
-                </button>
                 {navSt?.arrived ? (
-                  <p className="text-xl font-extrabold">
+                  <p className="drv-turn-msg">
                     {remainingDwellSec > 0 ? "목적지 도착 (체류 중)" : "목적지 도착"}
                   </p>
                 ) : navSt?.offRoute ? (
-                  <p className="text-lg font-extrabold">경로 재탐색 중…</p>
+                  <p className="drv-turn-msg">경로 재탐색 중</p>
                 ) : navSt?.next ? (
                   <>
-                    <span className="shrink-0 text-4xl font-black leading-none">
-                      <IconManeuver type={navSt.next.m.type} className="h-6 w-6" />
-                    </span>
+                    <IconManeuver type={navSt.next.m.type} className="drv-turn-icon" />
                     <div className="min-w-0 flex-1">
-                      <p className="text-2xl font-extrabold leading-tight tabular-nums">
-                        {fmtM(navSt.next.distM)}
-                      </p>
-                      <p className="truncate text-[13px] text-accent-text">
+                      <p className="drv-big drv-turn-dist">{bigM(navSt.next.distM)}</p>
+                      <p className="drv-turn-sub">
                         {navSt.next.m.type === "arrive"
                           ? "목적지"
                           : MANEUVER_LABEL[navSt.next.m.type]}
@@ -5423,188 +5433,176 @@ export default function FundrivePage() {
                       </p>
                     </div>
                     {navSt.cam && !pleosCamera && (
-                      <span className="shrink-0 rounded-md bg-danger-strong px-3 py-2 text-center text-sm font-bold leading-tight tabular-nums">
+                      <span className="drv-cam">
                         {navSt.cam.c.limitKmh ? (
-                          <span className="block rounded-sm bg-panel px-1 text-[13px] font-black text-danger">
-                            {navSt.cam.c.limitKmh}
-                          </span>
+                          <span className="drv-limit">{navSt.cam.c.limitKmh}</span>
                         ) : null}
-                        <span className="mt-1 block">
-                          {navSt.cam.c.kind === "section" ? "구간" : "단속"}{" "}
-                          {fmtM(navSt.cam.distM)}
+                        <span>
+                          {navSt.cam.c.kind === "section" ? "구간" : "단속"} {fmtM(navSt.cam.distM)}
                         </span>
                       </span>
                     )}
                   </>
                 ) : (
-                  <p className="text-base font-bold">
+                  <p className="drv-turn-msg">
                     {phase === "paused"
                       ? "일시중지"
                       : gpsFixed
-                        ? "안내 준비 중…"
+                        ? "안내 준비 중"
                         : gpsErr?.includes("거부") || gpsErr?.includes("필요")
                           ? "위치 권한 꺼짐"
-                          : "GPS 신호 찾는 중…"}
+                          : "GPS 신호 찾는 중"}
                   </p>
                 )}
               </div>
-              {activePlanRef.current?.vias && activePlanRef.current.vias.length > 0 && (
-                <CourseStrip vias={activePlanRef.current.vias} pos={navPos ?? livePos} remainM={navSt?.remainM} remainSec={navSt?.remainSec} fallbackM={activePlanRef.current.distanceM} />
-              )}
-              <PleosSafetyCard />
+
               {navSt?.section && !pleosCamera && !navSt.arrived && (
-                <div
-                  className={`mt-2 flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-bold text-primary  ${
-                    navSt.section.limitKmh &&
-                    navSt.section.avgKmh > navSt.section.limitKmh
-                      ? "bg-danger-surface"
-                      : "bg-raised"
+                <p
+                  className={`drv-line ${
+                    navSt.section.limitKmh && navSt.section.avgKmh > navSt.section.limitKmh ? "is-danger" : ""
                   }`}
                 >
-                  <span>구간단속</span>
-                  <span className="tabular-nums">
-                    평균 {navSt.section.avgKmh}
-                    {navSt.section.limitKmh
-                      ? ` / 제한 ${navSt.section.limitKmh}`
-                      : ""}{" "}
-                    km/h
-                  </span>
-                </div>
+                  <b>구간단속 평균 {navSt.section.avgKmh}km/h</b>
+                  {navSt.section.limitKmh ? <span>(제한 {navSt.section.limitKmh})</span> : null}
+                </p>
               )}
-            </div>
+              <PleosSafetyCard />
 
-            {/* 하단 정보바 + 컨트롤 (오버레이) */}
-            <div ref={overBottomRef} data-over-map className="absolute inset-x-0 bottom-0 space-y-2 p-3">
-              {hasActiveDwell && (
-                <DwellSchedule
-                  vias={activeDwellVias}
-                  className="rounded-md bg-bg px-3 py-2"
-                />
-              )}
-
-              <div className="flex items-stretch gap-2 rounded-md bg-bg p-2">
-                <div className="flex flex-1 items-center justify-center gap-2 rounded-md bg-accent-surface px-1 py-2">
-                  <div className="flex flex-col items-center justify-center">
+              <dl className="drv-stats">
+                <div>
+                  <dt>현재 속도</dt>
+                  <dd className="flex items-center gap-3">
                     <span
-                      className={`text-3xl font-extrabold leading-none tabular-nums ${
+                      className={`drv-big ${
                         (!!pleosCamera || !!navSt?.cam) &&
                         (pleos.feed?.speedLimitKmh ?? (navSt?.limitTagged ? navSt.limitKmh : null)) != null &&
                         kmh > (pleos.feed?.speedLimitKmh ?? navSt?.limitKmh ?? Infinity)
-                          ? "text-danger"
-                          : "text-primary"
+                          ? "is-danger"
+                          : ""
                       }`}
                     >
                       {kmh}
+                      <small>{kmhEst ? "km/h 추정" : "km/h"}</small>
                     </span>
-                    <span className="text-[10px] text-secondary">{kmhEst ? "km/h 추정" : "km/h"}</span>
-                  </div>
-                  {/* 확정(OSM 태그·단속카메라) 제한속도만 표시 — 도로급 추정치는
-                      오차가 커서 아예 표시하지 않는다(틀린 표지판보다 없는 게 낫다). */}
-                  {/* 앞에 단속카메라가 있을 때만 제한속도 표지를 보인다(사용자 요청). */}
-                  {(!!pleosCamera || !!navSt?.cam) && (pleos.feed?.speedLimitKmh != null || (navSt?.limitKmh && navSt.limitTagged)) ? (
-                    <div
-                      className="flex h-11 w-11 shrink-0 flex-col items-center justify-center rounded-[50%] border-4 border-danger bg-signal leading-none"
-                      title="제한속도"
-                    >
-                      <span className="text-lg font-black tabular-nums text-signal-ink">
+                    {/* 확정(OSM 태그·단속카메라) 제한속도만, 앞에 단속카메라가 있을 때만 표지를 보인다.
+                        도로급 추정치는 오차가 커서 표시하지 않는다(틀린 표지판보다 없는 게 낫다). */}
+                    {(!!pleosCamera || !!navSt?.cam) && (pleos.feed?.speedLimitKmh != null || (navSt?.limitKmh && navSt.limitTagged)) ? (
+                      <span className="drv-limit" title="제한속도">
                         {pleos.feed?.speedLimitKmh ?? navSt?.limitKmh}
                       </span>
-                    </div>
-                  ) : null}
+                    ) : null}
+                  </dd>
                 </div>
-                <div className="flex flex-1 flex-col items-center justify-center px-1">
-                  <span className="text-xl font-bold tabular-nums text-primary">
-                    {navSt ? (navSt.remainM / 1000).toFixed(1) : "–"}
-                  </span>
-                  <span className="text-[10px] text-secondary">남은 km</span>
+                <div>
+                  <dt>남은 거리</dt>
+                  <dd className="drv-big">{navSt ? bigM(navSt.remainM) : "–"}</dd>
                 </div>
-                <div className="flex flex-1 flex-col items-center justify-center px-1">
-                  <span className="text-xl font-bold tabular-nums text-primary">
-                    {navSt
-                      ? new Date(
-                          Date.now() + (navSt.remainSec + remainingDwellSec) * 1000,
-                        ).toLocaleTimeString("ko-KR", {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })
-                      : "–"}
-                  </span>
-                  <span className="text-[10px] text-secondary">
+                <div>
+                  <dt>
+                    {remainingDwellSec > 0 ? "일정 종료" : "도착"}
                     {navSt && navSt.delaySec >= 60 ? (
-                      <span
-                        className={
-                          navSt.delaySec >= 600
-                            ? "font-bold text-danger"
-                            : "font-bold text-warn"
-                        }
-                      >
-                        정체 +{Math.round(navSt.delaySec / 60)}분
-                        {remainingDwellSec > 0
-                          ? ` (체류 ${Math.round(remainingDwellSec / 60)}분)`
-                          : ""}
+                      <span className={navSt.delaySec >= 600 ? "text-danger" : "text-warn"}>
+                        {" "}(정체 +{Math.round(navSt.delaySec / 60)}분)
                       </span>
-                    ) : (
-                      remainingDwellSec > 0 ? "체류 포함 일정 종료" : "도착"
-                    )}
-                  </span>
+                    ) : null}
+                  </dt>
+                  <dd className="drv-big">
+                    {navSt ? bigClock(navSt.remainSec + remainingDwellSec) : "–"}
+                  </dd>
                 </div>
-              </div>
+                <div>
+                  <dt>
+                    남은 시간
+                    {remainingDwellSec > 0 ? <span> (체류 {Math.round(remainingDwellSec / 60)}분 포함)</span> : null}
+                  </dt>
+                  <dd className="drv-big">{navSt ? bigDur(navSt.remainSec + remainingDwellSec) : "–"}</dd>
+                </div>
+              </dl>
+
+              <SpecialNow segs={driveSpecial} along={navSt?.along ?? null} />
+              {activePlanRef.current?.vias && activePlanRef.current.vias.length > 0 && (
+                <CourseStrip vias={activePlanRef.current.vias} pos={navPos ?? livePos} remainM={navSt?.remainM} remainSec={navSt?.remainSec} fallbackM={activePlanRef.current.distanceM} />
+              )}
+              {activePlanRef.current && !activePlanRef.current.standalone && (
+                <CourseBar segs={driveSpecial} along={navSt?.along ?? null} total={navEng.current.totalM} />
+              )}
+              {hasActiveDwell && (
+                <DwellSchedule vias={activeDwellVias} className="drv-dwell" />
+              )}
               {gpsErr && (
-                <div className="flex items-center justify-center gap-2">
-                  <p className="text-xs text-warn">{gpsErr}</p>
+                <div className="drv-gps">
+                  <p>{gpsErr}</p>
                   {(gpsErr.includes("거부") || gpsErr.includes("필요")) && (
-                    <button
-                      type="button"
-                      onClick={retryGps}
-                      className="rounded-sm bg-warn-surface px-3 py-1 text-xs font-semibold text-warn"
-                    >
+                    <button type="button" onClick={retryGps} className="drv-btn">
                       다시 시도
                     </button>
                   )}
                 </div>
               )}
-              <div className="flex w-full gap-2">
-                <button
-                  type="button"
-                  onClick={() => setRoutePick({ kind: "reroute" })}
-                  className="flex-1 rounded-md bg-raised py-3 text-base font-bold text-accent-text transition-transform"
-                >
-                  재탐색
-                </button>
-                <button
-                  type="button"
-                  onClick={cancelRoute}
-                  className="flex-1 rounded-md bg-raised py-3 text-base font-bold text-warn transition-transform"
-                >
-                  경로 취소
-                </button>
+
+              <div ref={overBottomRef} className="drv-controls">
+                <div className="drv-row">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setVoiceOn((v) => {
+                        try {
+                          localStorage.setItem(
+                            "drivelog-nav-voice-v1",
+                            v ? "off" : "on",
+                          );
+                        } catch {}
+                        if (v) window.speechSynthesis?.cancel?.();
+                        return !v;
+                      })
+                    }
+                    className="drv-btn"
+                    aria-label={voiceOn ? "음성 안내 끄기" : "음성 안내 켜기"}
+                    aria-pressed={voiceOn}
+                  >
+                    <IconSound on={voiceOn} />
+                    {voiceOn ? "음성 켬" : "음성 끔"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRoutePick({ kind: "reroute" })}
+                    className="drv-btn"
+                  >
+                    재탐색
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelRoute}
+                    className="drv-btn"
+                  >
+                    경로 취소
+                  </button>
+                </div>
+                <div className="drv-row">
+                  <button
+                    type="button"
+                    onClick={pauseResume}
+                    className={`drv-btn drv-btn-main ${phase === "paused" ? "is-resume" : ""}`}
+                  >
+                    {phase === "paused" ? "재개" : "일시중지"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={armStop}
+                    className={`drv-btn drv-btn-main is-stop ${stopArm ? "is-armed" : ""}`}
+                  >
+                    {stopArm ? "한 번 더 눌러 종료" : "주행 종료"}
+                  </button>
+                </div>
               </div>
-              <div className="flex w-full gap-2">
-                <button
-                  type="button"
-                  onClick={pauseResume}
-                  className="min-h-touch min-w-touch border border-line flex-1 rounded-md bg-raised py-3 text-base font-bold text-primary transition-transform"
-                >
-                  {phase === "paused" ? "재개" : "일시중지"}
-                </button>
-                <button
-                  type="button"
-                  onClick={armStop}
-                  className={`min-h-touch min-w-touch border border-line flex-1 rounded-md py-3 text-base font-bold text-primary transition-transform  ${
-                    stopArm ? "bg-warn-strong text-primary" : "bg-danger-strong"
-                  }`}
-                >
-                  {stopArm ? "한 번 더 눌러 종료" : "주행 종료"}
-                </button>
-              </div>
-            </div>
+            </aside>
           </div>
         )}
 
         {driving && (recordOnlyScreen || !navReady) && (
-          <div data-native-driving data-record-only={recordOnlyScreen || undefined} className="fixed inset-0 z-40 bg-bg">
-            {/* 전체화면 지도 — 현위치·진행방향(회전)·지나온 궤적 */}
-            <div className="absolute inset-0">
+          <div data-native-driving data-drv data-record-only={recordOnlyScreen || undefined} className="drv fixed inset-0 z-40">
+            {/* 왼쪽 지도 — 현위치·진행방향(회전)·지나온 궤적 */}
+            <div className="drv-map">
               <NavMapAny
                 engineToggle={engineToggle}
                 path={[]}
@@ -5618,164 +5616,125 @@ export default function FundrivePage() {
                 compare={devCompare}
                 offRoute={false}
                 trace={recTrace}
-                insetTop={overTopH ?? (routeGuideShown && activePlanRef.current?.vias?.length ? 136 : 80)}
-                insetBottom={
-                  overBottomH ??
-                  (hasActiveDwell && routeGuideShown
-                      ? 250
-                      : 210)
-                }
+                insetTop={0}
+                insetBottom={0}
                 fullBleed
               />
             </div>
 
-            {/* 상단 — 현재 속도 + 제한속도 표지 + 상태 */}
-            <div ref={overTopRef} data-over-map className="absolute inset-x-0 top-0 p-3">
-              <div className="flex items-center gap-3 rounded-md bg-panel px-4 py-3">
+            {/* 오른쪽 정보 칸 — 현재 속도를 가장 크게, 상태, 기록 숫자, 큰 단추 */}
+            <aside data-over-map className="drv-panel">
+              <div className="drv-turn">
                 {(() => {
                   const limit = pleos.feed?.speedLimitKmh ?? (freeLimit?.tagged ? freeLimit.kmh : null);
                   const over = routeGuideShown && (!!pleosCamera || !!freeCamWarn) && limit != null && phase !== "paused" && kmh > limit + Math.max(5, limit * 0.08);
                   return (
-                    <>
-                      <span
-                        className={`text-3xl font-black tabular-nums leading-none ${
-                          phase === "paused"
-                            ? "text-disabled"
-                            : over
-                              ? "text-danger"
-                              : "text-primary"
-                        }`}
-                      >
-                        {kmh}
-                      </span>
-                      <span className="text-xs font-medium text-secondary">
-                        {kmhEst ? "km/h 추정" : "km/h"}
-                      </span>
-                    </>
+                    <span
+                      className={`drv-big drv-speed ${
+                        phase === "paused" ? "is-off" : over ? "is-danger" : ""
+                      }`}
+                    >
+                      {kmh}
+                      <small>{kmhEst ? "km/h 추정" : "km/h"}</small>
+                    </span>
                   );
                 })()}
 
-                {/* 제한속도 표지 — 확정(OSM 태그·단속카메라)만 표시. 도로급
-                    추정치는 오차가 커서 표시하지 않는다(틀린 표지판보다 없는 게 낫다). */}
-                {/* 앞에 단속카메라가 있을 때만(사용자 요청) */}
+                {/* 제한속도 표지 — 확정(OSM 태그·단속카메라)만, 앞에 단속카메라가 있을 때만(사용자 요청).
+                    도로급 추정치는 오차가 커서 표시하지 않는다(틀린 표지판보다 없는 게 낫다). */}
                 {routeGuideShown && (!!pleosCamera || !!freeCamWarn) && (pleos.feed?.speedLimitKmh != null || freeLimit?.tagged) && (
-                  <div className="flex flex-col items-center leading-none">
-                    <div className="flex h-11 w-11 items-center justify-center rounded-[50%] border-[3px] border-danger bg-signal">
-                      <span className="text-base font-black tabular-nums text-signal-ink">
-                        {pleos.feed?.speedLimitKmh ?? freeLimit?.kmh}
-                      </span>
-                    </div>
-                  </div>
+                  <span className="drv-limit is-big" title="제한속도">
+                    {pleos.feed?.speedLimitKmh ?? freeLimit?.kmh}
+                  </span>
                 )}
-                <span className="ml-auto truncate text-[13px] text-secondary">
-                  {phase === "paused"
-                    ? "일시중지"
-                    : gpsFixed
-                      ? `${addr || "GPS 연결됨"}${abroad ? " (해외, 기록만)" : ""}`
-                      : gpsErr?.includes("거부") || gpsErr?.includes("필요")
-                        ? "위치 권한 꺼짐"
-                        : approxAcc != null
-                          ? `${addr ? `${addr} ` : ""}(GPS 잡는 중)`
-                          : "GPS 신호 찾는 중…"}
-                </span>
               </div>
+              <p className="drv-status">
+                {phase === "paused"
+                  ? "일시중지"
+                  : gpsFixed
+                    ? `${addr || "GPS 연결됨"}${abroad ? " (해외, 기록만)" : ""}`
+                    : gpsErr?.includes("거부") || gpsErr?.includes("필요")
+                      ? "위치 권한 꺼짐"
+                      : approxAcc != null
+                        ? `${addr ? `${addr} ` : ""}(GPS 잡는 중)`
+                        : "GPS 신호 찾는 중"}
+              </p>
               {guideMode === "native" && activePlanRef.current && pleos.feed?.courseStatus?.paused && (
-                <p data-over-map role="status" className="mt-2 truncate rounded-md border border-line bg-panel px-4 py-2 text-sm text-warn" title={pleos.feed.courseStatus.reason}>{pleos.feed.courseStatus.reason}</p>
+                <p role="status" className="drv-line is-warn" title={pleos.feed.courseStatus.reason}>{pleos.feed.courseStatus.reason}</p>
               )}
-              {/* 이 앱 안내(local)가 아니면 기록 화면만 — 코스 줄·회전·단속·도착 배터리 안내를 띄우지 않는다 */}
-              {routeGuideShown && activePlanRef.current?.vias && activePlanRef.current.vias.length > 0 && (
-                <CourseStrip vias={activePlanRef.current.vias} pos={navPos ?? livePos} remainM={navSt?.remainM} remainSec={navSt?.remainSec} fallbackM={activePlanRef.current.distanceM} />
-              )}
-              {routeGuideShown && <PleosSafetyCard />}
-              {/* 전방 단속카메라 경고 배너 */}
+              {/* 전방 단속카메라 경고 */}
               {routeGuideShown && freeCamWarn && !pleosCamera && phase !== "paused" && (
-                <div className="mt-2 flex items-center gap-3 rounded-md bg-danger-surface px-4 py-3 text-primary">
-                  <IconCamera className="h-6 w-6" />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-extrabold leading-tight">
-                      {freeCamWarn.school
-                        ? "어린이보호구역 단속"
-                        : freeCamWarn.kind === "section"
-                          ? "구간단속 구간"
-                          : "전방 단속카메라"}
-                      {freeCamWarn.limitKmh ? ` (제한 ${freeCamWarn.limitKmh})` : ""}
-                    </p>
-                  </div>
-                  <span className="shrink-0 text-lg font-black tabular-nums">
+                <div className="drv-line is-danger">
+                  <IconCamera className="h-7 w-7 shrink-0" />
+                  <b className="min-w-0 flex-1 truncate">
+                    {freeCamWarn.school
+                      ? "어린이보호구역 단속"
+                      : freeCamWarn.kind === "section"
+                        ? "구간단속 구간"
+                        : "전방 단속카메라"}
+                    {freeCamWarn.limitKmh ? ` (제한 ${freeCamWarn.limitKmh})` : ""}
+                  </b>
+                  <b className="shrink-0 tabular-nums">
                     {freeCamWarn.distM >= 1000
                       ? `${(freeCamWarn.distM / 1000).toFixed(1)}km`
                       : `${freeCamWarn.distM}m`}
-                  </span>
+                  </b>
                 </div>
               )}
+              {/* 이 앱 안내(local)가 아니면 기록 화면만 — 코스 줄·회전·단속·도착 배터리 안내를 띄우지 않는다 */}
+              {routeGuideShown && <PleosSafetyCard />}
+
+              <dl className="drv-stats is-3">
+                <div>
+                  <dt>주행 거리</dt>
+                  <dd className="drv-big">{(distM / 1000).toFixed(1)}<small>km</small></dd>
+                </div>
+                <div>
+                  <dt>경과</dt>
+                  <dd className="drv-big">{bigDur(elapsed, true)}</dd>
+                </div>
+                <div>
+                  <dt>최고 속도</dt>
+                  <dd className="drv-big">{maxKmh}<small>km/h</small></dd>
+                </div>
+              </dl>
+
+              {routeGuideShown && activePlanRef.current?.vias && activePlanRef.current.vias.length > 0 && (
+                <CourseStrip vias={activePlanRef.current.vias} pos={navPos ?? livePos} remainM={navSt?.remainM} remainSec={navSt?.remainSec} fallbackM={activePlanRef.current.distanceM} />
+              )}
+              {hasActiveDwell && routeGuideShown && (
+                <DwellSchedule vias={activeDwellVias} className="drv-dwell" />
+              )}
               {gpsErr && (
-                <div className="mt-1 flex items-center gap-2 px-1">
-                  <p className="text-xs text-warn">{gpsErr}</p>
+                <div className="drv-gps">
+                  <p>{gpsErr}</p>
                   {(gpsErr.includes("거부") || gpsErr.includes("필요")) && (
-                    <button
-                      type="button"
-                      onClick={retryGps}
-                      className="rounded-sm bg-warn-surface px-3 py-1 text-xs font-semibold text-warn"
-                    >
+                    <button type="button" onClick={retryGps} className="drv-btn">
                       다시 시도
                     </button>
                   )}
                 </div>
               )}
-            </div>
 
-            {/* 하단 — 스탯 + 릴레이 + 컨트롤 */}
-            <div ref={overBottomRef} data-over-map className="absolute inset-x-0 bottom-0 space-y-3 p-3">
-              {hasActiveDwell && routeGuideShown && (
-                <DwellSchedule
-                  vias={activeDwellVias}
-                  className="rounded-md bg-bg px-3 py-2"
-                />
-              )}
-
-              <div className="grid grid-cols-3 gap-2 rounded-md bg-panel p-3 text-center">
-                <div>
-                  <div className="text-xl font-bold tabular-nums">
-                    {(distM / 1000).toFixed(1)}
-                  </div>
-                  <div className="text-[11px] text-secondary">
-                    {"주행 km"}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-xl font-bold tabular-nums">
-                    {fmtDur(elapsed)}
-                  </div>
-                  <div className="text-[11px] text-secondary">경과</div>
-                </div>
-                <div>
-                  <div className="text-xl font-bold tabular-nums">
-                    {maxKmh}
-                  </div>
-                  <div className="text-[11px] text-secondary">
-                    {"최고 km/h"}
-                  </div>
+              <div ref={overBottomRef} className="drv-controls">
+                <div className="drv-row">
+                  <button
+                    type="button"
+                    onClick={pauseResume}
+                    className={`drv-btn drv-btn-main ${phase === "paused" ? "is-resume" : ""}`}
+                  >
+                    {phase === "paused" ? "재개" : "일시중지"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={armStop}
+                    className={`drv-btn drv-btn-main is-stop ${stopArm ? "is-armed" : ""}`}
+                  >
+                    {stopArm ? "한 번 더 눌러 종료" : "주행 종료"}
+                  </button>
                 </div>
               </div>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={pauseResume}
-                  className="min-h-touch min-w-touch border border-line flex-1 rounded-md bg-raised py-4 text-base font-bold text-primary transition-transform"
-                >
-                  {phase === "paused" ? "재개" : "일시중지"}
-                </button>
-                <button
-                  type="button"
-                  onClick={armStop}
-                  className={`min-h-touch min-w-touch border border-line flex-1 rounded-md py-4 text-base font-bold text-primary transition-transform  ${
-                    stopArm ? "bg-warn-strong text-primary" : "bg-danger-strong"
-                  }`}
-                >
-                  {stopArm ? "한 번 더 눌러 종료" : "주행 종료"}
-                </button>
-              </div>
-            </div>
+            </aside>
           </div>
         )}
 
@@ -5813,7 +5772,7 @@ export default function FundrivePage() {
             className={routePick.kind === "reroute"
               // 주행 중 재탐색: 화면 전체를 덮지 않는다(정책: 주행 중 전체 화면 팝업 금지).
               // 가운데 카드만 띄워 위 회전 안내·아래 속도 줄이 계속 보이게 한다.
-              ? "pointer-events-none fixed inset-x-0 top-1/2 z-[80] flex -translate-y-1/2 justify-center px-4"
+              ? "drv-pop pointer-events-none fixed inset-x-0 top-1/2 z-[80] flex -translate-y-1/2 justify-center px-4"
               : "fixed inset-0 z-[80] flex items-end justify-center bg-bg sm:items-center"}
             onClick={closeRoutePick}
           >
@@ -5953,7 +5912,7 @@ export default function FundrivePage() {
                   <button
                     type="button"
                     onClick={() => runReroute("keep")}
-                    className="flex flex-col items-start gap-1 rounded-md border border-line bg-raised p-4 text-left transition-transform"
+                    className="flex flex-col items-start gap-1 rounded-md border border-line bg-raised p-4 text-left"
                   >
                     <span className="text-[15px] font-bold text-primary">
                       원래 가던 길로
@@ -5965,7 +5924,7 @@ export default function FundrivePage() {
                   <button
                     type="button"
                     onClick={() => runReroute("time")}
-                    className="flex flex-col items-start gap-1 rounded-md border border-line bg-raised p-4 text-left transition-transform"
+                    className="flex flex-col items-start gap-1 rounded-md border border-line bg-raised p-4 text-left"
                   >
                     <span className="text-[15px] font-bold text-primary">
                       최단시간으로
@@ -5987,112 +5946,95 @@ export default function FundrivePage() {
           </div>
         )}
 
-        {phase === "done" && summary && (
-          <div className="flex flex-1 flex-col justify-center gap-4 py-8">
-            <h2 className="text-center text-xl font-bold">
-              {"주행 완료"}
-            </h2>
-            {summary.startAddr && (
-              <p className="text-center text-xs text-secondary">
-                {summary.startAddr}
-                {summary.endAddr && summary.endAddr !== summary.startAddr
-                  ? ` – ${summary.endAddr}`
-                  : ""}
-              </p>
-            )}
-            {summary.path && <RouteMap enc={summary.path} className="h-52" />}
-            {/* 플래너 코스로 달렸으면 예상 vs 실제 — 단, 실제로 달린(100m 이상)
-                기록만. 0km·수십초짜리 유령 주행에서 "-4:27:54" 같은 무의미한
-                음수 델타가 뜨던 문제(스샷 25)를 막는다. */}
-            {summary.courseLabel && summary.planSec && summary.distanceM >= 100 && (
-              <div className="rounded-md border border-ok bg-ok-surface p-4">
-                <p className="truncate text-xs font-semibold text-ok">
-                  {cleanLabel(summary.courseLabel)}
-                </p>
-                <div className="mt-2 space-y-1 text-sm">
-                  <div className="flex items-baseline justify-between">
-                    <span className="text-secondary">시간</span>
-                    <span>
-                      {fmtDur(summary.planSec)}
-                      <span className="mx-2 text-disabled">–</span>
-                      <b>{fmtDur((summary.endTs - summary.startTs) / 1000)}</b>
-                      <span
-                        className={`ml-2 text-xs ${
-                          (summary.endTs - summary.startTs) / 1000 <=
-                          summary.planSec
-                            ? "text-ok"
-                            : "text-warn"
-                        }`}
-                      >
-                        {(summary.endTs - summary.startTs) / 1000 <=
-                        summary.planSec
-                          ? "-"
-                          : "+"}
-                        {fmtDur(
-                          Math.abs(
-                            (summary.endTs - summary.startTs) / 1000 -
-                              summary.planSec,
-                          ),
-                        )}
-                      </span>
-                    </span>
-                  </div>
-                  <div className="flex items-baseline justify-between">
-                    <span className="text-secondary">거리</span>
-                    <span>
-                      {((summary.planM ?? 0) / 1000).toFixed(0)}km
-                      <span className="mx-2 text-disabled">–</span>
-                      <b>{(summary.distanceM / 1000).toFixed(1)}km</b>
-                    </span>
-                  </div>
-                </div>
-              </div>
-            )}
-            <div className="grid grid-cols-2 gap-3">
-              {[
-                ["이동거리", `${(summary.distanceM / 1000).toFixed(1)}km`],
-                ["총 시간", fmtDur((summary.endTs - summary.startTs) / 1000)],
-                ["최고 속도", fmtSpeed(summary.maxKmh, summary.mode)],
-                ["평균 속도", fmtSpeed(summary.avgKmh, summary.mode)],
-              ].map(([label, v]) => (
-                <div
-                  key={label}
-                  className="rounded-md bg-panel p-4 text-center"
-                >
-                  <div className="text-2xl font-bold tabular-nums">{v}</div>
-                  <div className="mt-1 text-xs text-secondary">{label}</div>
-                </div>
-              ))}
+        {phase === "done" && summary && (() => {
+          const tookSec = (summary.endTs - summary.startTs) / 1000;
+          const diffSec = summary.planSec ? tookSec - summary.planSec : 0;
+          return (
+          <div data-drv-done className="drv-done fixed inset-0 z-40">
+            <div className="drv-done-map">
+              {summary.path ? <RouteMap enc={summary.path} className="h-full" /> : <div className="h-full bg-panel" />}
             </div>
-            {recordSkipped ? (
-              <p className="text-center text-xs text-secondary">
-                내비 주행 자동 기록이 꺼져 있어 저장 안 함
-              </p>
-            ) : (
-              summary.distanceM < 100 && (
-                <p className="text-center text-xs text-secondary">
-                  100m 미만이라 기록엔 저장 안 했어요
-                </p>
-              )
-            )}
-            <button
-              type="button"
-              onClick={() => start(undefined, "car")}
-              className="mt-2 w-full rounded-md bg-ok-strong py-4 text-lg font-bold text-primary transition-transform"
-            >
-              새 주행 시작
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setPhase("idle");
-              }}
-              className="w-full rounded-md bg-raised py-3 text-sm font-medium text-secondary"
-            >
-              기록 목록으로
-            </button>
+            <section className="drv-done-panel">
+              <div className="drv-done-scroll">
+                <h2 className="drv-done-title">주행 완료</h2>
+                {summary.startAddr && (
+                  <p className="drv-done-sub">
+                    {summary.startAddr}
+                    {summary.endAddr && summary.endAddr !== summary.startAddr
+                      ? ` – ${summary.endAddr}`
+                      : ""}
+                  </p>
+                )}
+                <dl className="drv-done-stats">
+                  <div>
+                    <dt>거리</dt>
+                    <dd className="drv-big">{(summary.distanceM / 1000).toFixed(1)}<small>km</small></dd>
+                  </div>
+                  <div>
+                    <dt>시간</dt>
+                    <dd className="drv-big">{bigDur(tookSec, true)}</dd>
+                  </div>
+                  <div>
+                    <dt>최고 속도</dt>
+                    <dd className="drv-big">{summary.maxKmh}<small>km/h</small></dd>
+                  </div>
+                  <div>
+                    <dt>평균 속도</dt>
+                    <dd className="drv-big">{summary.avgKmh}<small>km/h</small></dd>
+                  </div>
+                </dl>
+                {/* 플래너 코스로 달렸으면 예상 vs 실제 — 단, 실제로 달린(100m 이상)
+                    기록만. 0km·수십초짜리 유령 주행에서 "-4:27:54" 같은 무의미한
+                    음수 델타가 뜨던 문제(스샷 25)를 막는다. */}
+                {summary.courseLabel && summary.planSec && summary.distanceM >= 100 && (
+                  <div className="drv-done-plan">
+                    <p className="drv-done-plan-name">{cleanLabel(summary.courseLabel)}</p>
+                    <p>
+                      <b>시간 {durText(tookSec)}</b>
+                      <span>
+                        {" "}(예상 {durText(summary.planSec)},{" "}
+                        <em className={diffSec <= 0 ? "text-ok" : "text-warn"}>
+                          {diffSec <= 0 ? "-" : "+"}{durText(Math.abs(diffSec))}
+                        </em>
+                        )
+                      </span>
+                    </p>
+                    <p>
+                      <b>거리 {(summary.distanceM / 1000).toFixed(1)}km</b>
+                      <span> (예상 {((summary.planM ?? 0) / 1000).toFixed(0)}km)</span>
+                    </p>
+                  </div>
+                )}
+                {recordSkipped ? (
+                  <p className="drv-done-note">내비 주행 자동 기록이 꺼져 있어 저장 안 함</p>
+                ) : (
+                  summary.distanceM < 100 && (
+                    <p className="drv-done-note">100m 미만이라 기록엔 저장 안 했어요</p>
+                  )
+                )}
+              </div>
+              <div className="drv-done-actions">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPhase("idle");
+                  }}
+                  className="drv-btn"
+                >
+                  기록 목록으로
+                </button>
+                <button
+                  type="button"
+                  onClick={() => start(undefined, "car")}
+                  className="drv-cta"
+                >
+                  새 주행 시작
+                </button>
+              </div>
+            </section>
           </div>
-        )}
+          );
+        })()}
 
         {/* 주행 중(차량 UX 제한)에는 한 번 누르는 시작 버튼만 */}
         {uxBlocked && (
@@ -6186,7 +6128,7 @@ export default function FundrivePage() {
             <PleosVehicleCard />
             {/* 최근 코스 — 경로가 있는 지난 주행을 카드 카러셀로. 탭하면 다시 주행 */}
             {carRecords.some((r) => r.path) && (
-              <div>
+              <div data-recent-courses>
                 <p className="mb-2 px-1 text-[11px] font-medium uppercase tracking-wide text-secondary">
                   최근 코스
                 </p>
@@ -6210,8 +6152,7 @@ export default function FundrivePage() {
                                 `${(r.distanceM / 1000).toFixed(1)}km 주행`}
                             </p>
                             <p className="mt-1 text-[12px] tabular-nums text-secondary">
-                              {(r.distanceM / 1000).toFixed(1)}km ·{" "}
-                              {fmtDur((r.endTs - r.startTs) / 1000)}
+                              {(r.distanceM / 1000).toFixed(1)}km ({fmtDur((r.endTs - r.startTs) / 1000)})
                             </p>
                           </div>
                         </button>
@@ -6228,9 +6169,7 @@ export default function FundrivePage() {
                     {cleanLabel(plan.label)}
                   </p>
                   <p className="mt-1 text-[12px] text-secondary">
-                    예상 총 {fmtDur(plan.durationSec)} ·{" "}
-                    {(plan.distanceM / 1000).toFixed(0)}km
-                    {plan.path ? " (음성 안내)" : ""}
+                    예상 총 {fmtDur(plan.durationSec)} ({(plan.distanceM / 1000).toFixed(0)}km{plan.path ? ", 음성 안내" : ""})
                   </p>
                   <DwellSchedule vias={plan.vias} className="mt-2" />
                 </div>

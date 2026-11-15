@@ -112,6 +112,8 @@ export interface NavMapProps {
   compare?: { cams: { lat: number; lng: number; src: "public" | "tmap" | "kakao"; limit: number }[]; route?: LatLng[] } | null;
   /** 실시간 소통 샘플 (state 1정체~4원활) — 남은 경로를 초록/노랑/빨강으로 */
   traffic?: { lat: number; lng: number; state: number }[];
+  /** 코스 특별 구간(와인딩·해안·강변) — 출발부터 m, 교통색 위에 덧칠 */
+  special?: { from: number; to: number; color: string }[];
   /** 오버레이(배너·정보바)에 안 가리게 컨트롤을 밀어넣는 여백(px) */
   insetTop?: number;
   insetBottom?: number;

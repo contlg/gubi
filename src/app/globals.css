@@ -5,7 +5,7 @@
 
 @theme {
   --font-sans:
-    "Pretendard Variable", Pretendard, var(--font-geist-sans),
+    "Pretendard Variable", Pretendard,
     "Apple SD Gothic Neo", "Malgun Gothic", ui-sans-serif, system-ui, sans-serif;
 
   --color-bg: #09090b;
@@ -107,7 +107,7 @@ html[data-native-nav-map] [data-map-block] { visibility: visible; }
 [data-vehicle-touch] button > :is(span, p) {
   font-size: inherit;
 }
-[data-vehicle-touch] :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]), select) {
+[data-vehicle-touch] :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]):not(.gb-input), select) {
   min-height: 80px;
   font-size: 20px;
 }
@@ -189,52 +189,13 @@ html[data-native-nav-map] [data-map-block] { visibility: visible; }
 
 /* Keep the vehicle home on one screen without shrinking touch controls. */
 @media (min-width: 768px) {
-  [data-vehicle-home] [data-app-frame] {
-    padding: 16px 24px;
-  }
   [data-vehicle-home] [data-idle-content] {
-    padding-top: 12px;
-    padding-bottom: 104px;
+    padding-top: 0;
+    padding-bottom: 120px;
   }
   [data-vehicle-home] [data-course-home],
   [data-vehicle-home] [data-course-home] > div:first-child {
-    gap: 12px;
-  }
-  [data-vehicle-home] [data-planner-controls] {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 280px;
-    gap: 12px 20px;
-    padding: 16px;
-  }
-  [data-vehicle-home] [data-planner-mode] {
-    grid-column: 1;
-    grid-row: 1;
-    align-self: center;
-    justify-self: start;
-  }
-  [data-vehicle-home] [data-planner-form] {
-    display: contents;
-  }
-  [data-vehicle-home] [data-planner-places] {
-    grid-column: 1 / -1;
-    grid-row: 2;
-  }
-  [data-vehicle-home] [data-planner-form] > button[type="submit"] {
-    grid-column: 2;
-    grid-row: 1;
-  }
-  [data-vehicle-home] [data-planner-filters] {
-    grid-column: 1 / -1;
-    grid-row: 3;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 180px;
-    align-items: end;
-    gap: 16px;
-    margin-top: 0;
-    padding-top: 12px;
-  }
-  [data-vehicle-home] [data-planner-advanced] {
-    margin-top: 0;
+    gap: 24px;
   }
   [data-vehicle-home] [data-home-drive-actions] {
     display: flex;
@@ -424,4 +385,1285 @@ button:disabled { cursor: default; }
 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
+}
+
+/* ---- 굽이 새 디자인 (1단계: 코스 검색 화면) ----
+   어두운 바탕, 카드 한 단계, 강조색은 노랑 하나(코스 추천).
+   차량 공통 규칙(.text-sm 키우기, 버튼 64px 등)보다 뒤에, 같거나 높은 우선순위로 둔다. */
+:root {
+  --gb-bg: #101113;
+  --gb-card: #191a1d;
+  --gb-card-hi: #24262a;
+  --gb-text: #f4f3ef;
+  --gb-sub: #9a9ea5;
+  --gb-yellow: #f5c542;
+  --gb-ink: #1a1503;
+}
+
+[data-gubi-planner] {
+  color: var(--gb-text);
+}
+[data-gubi-planner] .gb-form {
+  display: flex;
+  flex-direction: column;
+}
+[data-gubi-planner] .gb-label {
+  margin: 28px 0 12px;
+  font-size: 18px;
+  line-height: 1.4;
+  color: var(--gb-sub);
+}
+[data-gubi-planner] .gb-form > .gb-label:first-child {
+  margin-top: 0;
+}
+
+/* 순환형/목적지형 — 작은 두 칸 고르기 */
+[data-gubi-planner] .gb-mode {
+  display: inline-flex;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+[data-gubi-planner] button.gb-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 64px;
+  padding: 0 22px;
+  border-radius: 32px;
+  background: var(--gb-card);
+  color: var(--gb-sub);
+  font-size: 19px;
+  font-weight: 600;
+}
+[data-gubi-planner] button.gb-mode-btn svg {
+  width: 24px;
+  height: 24px;
+}
+[data-gubi-planner] button.gb-mode-btn[aria-pressed="true"] {
+  background: var(--gb-text);
+  color: var(--gb-bg);
+  font-weight: 700;
+}
+
+/* 큰 장소 칸 — 지도에서 고르기, 현재 위치는 칸 안 오른쪽 */
+[data-gubi-planner] .gb-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 80px;
+  padding: 0 8px 0 28px;
+  border-radius: 20px;
+  background: var(--gb-card);
+}
+[data-gubi-planner] .gb-field:focus-within {
+  box-shadow: inset 0 0 0 2px #f4f3ef55;
+}
+[data-gubi-planner] input.gb-input {
+  flex: 1;
+  min-width: 0;
+  height: 80px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--gb-text);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+[data-gubi-planner] input.gb-input::placeholder {
+  color: var(--gb-sub);
+  font-weight: 500;
+}
+[data-gubi-planner] button.gb-field-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 64px;
+  min-height: 64px;
+  border-radius: 16px;
+  background: transparent;
+  color: var(--gb-sub);
+  font-size: 19px;
+  font-weight: 500;
+}
+[data-gubi-planner] button.gb-field-icon {
+  width: 64px;
+  padding: 0;
+}
+[data-gubi-planner] button.gb-field-icon:hover {
+  background: var(--gb-card-hi);
+  color: var(--gb-text);
+}
+[data-gubi-planner] button.gb-field-icon svg {
+  width: 28px;
+  height: 28px;
+}
+[data-gubi-planner] button.gb-field-icon:disabled {
+  opacity: 0.5;
+}
+
+/* 시간 고르기 / 길 고르기 — 같은 크기의 큰 칸 */
+[data-gubi-planner] .gb-seg {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  gap: 12px;
+}
+[data-gubi-planner] [data-planner-styles].gb-seg {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+[data-gubi-planner] button.gb-seg-btn,
+[data-gubi-planner] button.gb-road-btn {
+  min-height: 80px;
+  padding: 0 8px;
+  border-radius: 20px;
+  background: var(--gb-card);
+  color: var(--gb-sub);
+  font-size: 24px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+[data-gubi-planner] button.gb-road-btn {
+  min-height: 96px;
+  font-size: 25px;
+}
+[data-gubi-planner] button.gb-seg-btn[aria-pressed="true"] {
+  background: var(--gb-text);
+  color: var(--gb-bg);
+  font-weight: 700;
+}
+[data-gubi-planner] button.gb-road-btn[aria-pressed="true"] {
+  background: var(--gb-yellow);
+  color: var(--gb-ink);
+  font-weight: 700;
+}
+
+/* 아래 줄: 세부 설정 + 코스 추천 */
+[data-gubi-planner] .gb-go {
+  display: flex;
+  gap: 16px;
+  margin-top: 32px;
+}
+[data-gubi-planner] button.gb-adv,
+[data-gubi-planner] button.gb-cta {
+  min-height: 88px;
+  border-radius: 22px;
+}
+[data-gubi-planner] button.gb-adv {
+  flex: 0 0 240px;
+  max-width: 40%;
+  background: var(--gb-card);
+  color: var(--gb-sub);
+  font-size: 21px;
+  font-weight: 600;
+}
+[data-gubi-planner] button.gb-adv[aria-expanded="true"] {
+  color: var(--gb-text);
+}
+[data-gubi-planner] button.gb-cta {
+  flex: 1;
+  background: var(--gb-yellow);
+  color: var(--gb-ink);
+  font-size: 23px;
+  font-weight: 700;
+}
+[data-gubi-planner] button.gb-cta:disabled {
+  opacity: 0.6;
+}
+
+/* 코스 추천 탭 첫 화면 — 바탕, 위 줄(로고 + 순환형/목적지형), 바로 주행, 최근 코스, 아래 탭 */
+[data-vehicle-home] {
+  background: var(--gb-bg);
+}
+[data-vehicle-home] [data-app-frame] {
+  position: relative;
+}
+[data-vehicle-home] [data-gubi-mark] {
+  color: var(--gb-text);
+}
+[data-vehicle-home] [data-home-drive-actions] {
+  border: 0;
+  border-radius: 20px;
+  background: var(--gb-card);
+}
+[data-vehicle-home] [data-home-drive-actions] > h2 {
+  color: var(--gb-sub);
+}
+[data-vehicle-home] [data-home-drive-actions] button {
+  border: 0;
+  border-radius: 18px;
+  background: var(--gb-card-hi);
+  color: var(--gb-text);
+}
+[data-vehicle-home] [data-home-drive-actions] button.bg-accent {
+  background: var(--gb-text);
+  color: var(--gb-bg);
+}
+[data-vehicle-home] [data-recent-courses] > p {
+  margin-bottom: 12px;
+  font-size: 18px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--gb-sub);
+}
+[data-vehicle-home] [data-recent-courses] button {
+  border: 0;
+  border-radius: 20px;
+  background: var(--gb-card);
+}
+[data-vehicle-home] nav {
+  background: var(--gb-bg);
+  border-top-color: var(--gb-card);
+}
+[data-vehicle-home] nav button.text-accent-text {
+  color: var(--gb-yellow);
+}
+
+@media (min-width: 768px) {
+  [data-vehicle-home] [data-app-frame] {
+    padding: 0 40px;
+  }
+  [data-vehicle-home] [data-app-top] {
+    display: flex;
+    align-items: center;
+    height: 96px;
+  }
+  /* 순환형/목적지형은 위 줄 오른쪽으로 올린다 */
+  [data-vehicle-home] [data-gubi-planner] .gb-mode {
+    position: absolute;
+    top: 16px;
+    right: 40px;
+    margin: 0;
+  }
+  [data-vehicle-home] [data-home-drive-actions] {
+    padding: 16px 16px 16px 28px;
+  }
+}
+
+/* ---- 굽이 새 디자인 (2a단계: 추천 코스 카드 목록) ----
+   위 줄(로고 + 출발지), 조건 요약 + 조건 바꾸기, 코스 카드 3장 나란히. */
+.results-dialog:has(> [data-gubi-results]) {
+  background: var(--gb-bg);
+}
+[data-gubi-results] {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+  padding: 0 40px 28px;
+  background: var(--gb-bg);
+  color: var(--gb-text);
+}
+[data-gubi-results] .gb-list-top {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  height: 96px;
+}
+[data-gubi-results] .gb-logo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+[data-gubi-results] .gb-list-origin {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 20px;
+  color: var(--gb-sub);
+}
+[data-gubi-results] .gb-list-origin b {
+  color: var(--gb-text);
+  font-weight: 700;
+}
+[data-gubi-results] .gb-list-addr {
+  font-size: 17px;
+}
+[data-gubi-results] .gb-list-head {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+[data-gubi-results] .gb-list-summary {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 16px;
+}
+[data-gubi-results] .gb-list-summary b {
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+[data-gubi-results] .gb-list-styles {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--gb-yellow);
+}
+[data-gubi-results] .gb-list-note {
+  font-size: 17px;
+  color: var(--gb-sub);
+}
+[data-vehicle-touch] [data-gubi-results] button.gb-ghost,
+[data-gubi-results] button.gb-ghost,
+[data-gubi-detail] button.gb-ghost {
+  flex-shrink: 0;
+  min-height: 64px;
+  padding: 0 28px;
+  border-radius: 32px;
+  background: var(--gb-card);
+  color: var(--gb-sub);
+  font-size: 20px;
+  font-weight: 600;
+}
+[data-gubi-results] button.gb-ghost:hover {
+  color: var(--gb-text);
+}
+[data-gubi-results] .gb-list-alerts:empty {
+  display: none;
+}
+[data-gubi-results] .gb-list-alerts {
+  flex-shrink: 0;
+  margin: -12px 0 20px;
+}
+
+/* 코스 카드 — 위 큰 사진, 아래 이름·이유·큰 숫자. 고른 카드는 노란 안쪽 테두리 */
+[data-gubi-results] .gb-cards {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 24px;
+}
+[data-gubi-results] .gb-cards > li {
+  min-width: 0;
+  min-height: 0;
+}
+[data-vehicle-touch] [data-gubi-results] button.gb-card,
+[data-gubi-results] button.gb-card {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 520px;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  border-radius: 24px;
+  background: var(--gb-card);
+  color: var(--gb-text);
+  text-align: left;
+}
+[data-gubi-results] button.gb-card[aria-current="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 24px;
+  box-shadow: inset 0 0 0 4px var(--gb-yellow);
+  pointer-events: none;
+}
+[data-gubi-results] .gb-card-photo {
+  position: relative;
+  flex: 0 0 56%;
+  min-height: 200px;
+  overflow: hidden;
+  background: #16171a;
+}
+[data-vehicle-touch] [data-gubi-results] .gb-card-photo svg,
+[data-gubi-results] .gb-card-shape {
+  position: absolute;
+  inset: 12%;
+  width: 76%;
+  height: 76%;
+}
+[data-gubi-results] .gb-card-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  gap: 8px;
+  padding: 24px 24px 24px;
+}
+[data-gubi-results] .gb-card-name {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 25px;
+  font-weight: 800;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+  word-break: keep-all;
+}
+[data-gubi-results] .gb-card-why {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 19px;
+  color: var(--gb-sub);
+}
+[data-gubi-results] .gb-card-nums {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 24px;
+  margin-top: auto;
+  padding-top: 12px;
+}
+[data-gubi-results] .gb-card-nums .gb-big {
+  font-size: 44px;
+}
+[data-gubi-results] .gb-card-nums .gb-big small {
+  font-size: 17px;
+}
+/* 로드뷰를 그림처럼 — 화살표·길 이름·나침반 같은 조작 표시는 숨긴다 */
+[data-rv-still] > div > div > div:first-child > div:nth-child(n + 2),
+[data-rv-still] > div > div > div:is(:nth-child(2), :nth-child(3), :nth-child(4)) {
+  display: none !important;
+}
+.gb-big {
+  font-size: 52px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.gb-big small {
+  margin: 0 2px;
+  font-size: 20px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--gb-sub);
+}
+@media (max-width: 899px), (orientation: portrait) {
+  [data-gubi-results] {
+    padding: 0 20px 24px;
+  }
+  [data-gubi-results] .gb-list-head {
+    flex-wrap: wrap;
+  }
+  [data-gubi-results] .gb-cards {
+    flex: none;
+    grid-template-columns: 1fr;
+  }
+  [data-vehicle-touch] [data-gubi-results] button.gb-card,
+  [data-gubi-results] button.gb-card {
+    min-height: 0;
+  }
+  [data-gubi-results] .gb-card-photo {
+    flex: none;
+    height: 220px;
+  }
+}
+
+/* ---- 굽이 새 디자인 (2b단계: 코스 상세 — 왼쪽 지도, 오른쪽 설명) ---- */
+.results-dialog:has(> [data-gubi-detail]) {
+  background: var(--gb-bg);
+}
+[data-gubi-detail] {
+  display: grid;
+  grid-template-columns: minmax(0, 57.5%) minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  background: var(--gb-bg);
+  color: var(--gb-text);
+}
+[data-gubi-detail] .gb-detail-map {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+.gb-map-surface {
+  height: 100%;
+}
+
+/* 지도 위 단추 — 흰 바탕 큰 단추 */
+:is([data-gubi-detail], [data-vehicle-touch]) button.gb-back,
+button.gb-back {
+  min-height: 64px;
+  padding: 0 26px;
+  border-radius: 32px;
+  background: #fff;
+  color: #101113;
+  font-size: 22px;
+  font-weight: 800;
+  box-shadow: 0 2px 10px #0003;
+}
+:is([data-gubi-detail], [data-vehicle-touch]) button.gb-map-btn,
+button.gb-map-btn {
+  min-height: 64px;
+  padding: 0 20px;
+  border-radius: 18px;
+  background: #fff;
+  color: #101113;
+  font-size: 18px;
+  font-weight: 700;
+  box-shadow: 0 2px 10px #0003;
+}
+.gb-map-zoom {
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 2px 10px #0003;
+}
+:is([data-gubi-detail], [data-vehicle-touch]) .gb-map-zoom button,
+.gb-map-zoom button {
+  width: 64px;
+  min-width: 64px;
+  height: 64px;
+  min-height: 64px;
+  padding: 0;
+  background: transparent;
+  color: #101113;
+  font-size: 26px;
+  font-weight: 700;
+}
+.gb-map-zoom button + button {
+  border-top: 1px solid #e5e5e5;
+}
+
+/* 범례 알약 — 교통 4색 | 특별 구간 색 */
+.gb-map-legend {
+  position: absolute;
+  left: 16px;
+  bottom: 40px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 12px 22px;
+  border-radius: 999px;
+  background: #fff;
+  color: #101113;
+  font-size: 18px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 2px 10px #0003;
+  pointer-events: none;
+}
+.gb-map-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.gb-map-legend i {
+  display: inline-block;
+  width: 22px;
+  height: 8px;
+  border-radius: 4px;
+}
+.gb-map-legend b {
+  width: 1px;
+  height: 22px;
+  background: #d4d4d4;
+}
+
+/* 지도 위 로드뷰 카드 — 누르면 크게 */
+.gb-rv-callout {
+  overflow: hidden;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 4px 16px #0004;
+}
+.gb-rv-photo {
+  position: relative;
+  display: block;
+  height: 170px;
+  overflow: hidden;
+  cursor: pointer;
+  background: #d9dde2;
+}
+[data-vehicle-touch] .gb-rv-callout [role="button"].gb-rv-photo {
+  min-height: 170px;
+}
+.gb-rv-caption {
+  overflow: hidden;
+  padding: 14px 16px;
+  color: #6b7078;
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gb-rv-caption b {
+  color: #101113;
+  font-weight: 700;
+}
+
+/* 오른쪽 설명 — 이름, 이유, 큰 숫자, 길 종류 설명, 아래 노란 출발 단추 */
+[data-gubi-detail] .gb-detail-panel {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  padding: 0 36px 36px;
+}
+[data-gubi-detail] .gb-panel-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 40px;
+}
+[data-gubi-detail] .gb-detail-name {
+  font-size: 36px;
+  font-weight: 800;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  word-break: keep-all;
+}
+[data-gubi-detail] .gb-detail-why {
+  margin-top: 10px;
+  color: var(--gb-sub);
+  font-size: 21px;
+}
+[data-gubi-detail] .gb-detail-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+  margin-top: 40px;
+}
+[data-gubi-detail] .gb-detail-stats dt {
+  color: var(--gb-sub);
+  font-size: 19px;
+}
+[data-gubi-detail] .gb-detail-stats dd {
+  margin-top: 10px;
+}
+[data-gubi-detail] .gb-big {
+  font-size: 60px;
+}
+[data-gubi-detail] .gb-big small {
+  font-size: 24px;
+}
+[data-gubi-detail] .gb-type {
+  margin-top: 40px;
+}
+[data-gubi-detail] .gb-type-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+[data-gubi-detail] .gb-type-title {
+  color: var(--gb-sub);
+  font-size: 19px;
+}
+[data-gubi-detail] .gb-type-legend {
+  display: flex;
+  gap: 18px;
+  color: var(--gb-sub);
+  font-size: 16px;
+}
+[data-gubi-detail] .gb-type-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+[data-gubi-detail] .gb-sw-curve {
+  display: inline-block;
+  width: 16px;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--gb-yellow);
+}
+[data-gubi-detail] .gb-sw-ele {
+  display: inline-block;
+  width: 18px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--gb-text);
+}
+[data-gubi-detail] .gb-type-chart {
+  display: block;
+  width: 100%;
+  height: 150px;
+  margin-top: 16px;
+}
+[data-gubi-detail] .gb-type-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  color: var(--gb-sub);
+  font-size: 16px;
+}
+[data-gubi-detail] .gb-type-line {
+  margin-top: 20px;
+  color: var(--gb-sub);
+  font-size: 21px;
+}
+[data-gubi-detail] .gb-type-line b {
+  color: var(--gb-text);
+  font-weight: 600;
+}
+[data-gubi-detail] .gb-type-big {
+  margin-top: 10px;
+}
+[data-gubi-detail] .gb-share {
+  display: block;
+  height: 12px;
+  margin-top: 22px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: #2a2c31;
+}
+[data-gubi-detail] .gb-share > span {
+  display: block;
+  height: 100%;
+  border-radius: 6px;
+}
+[data-gubi-detail] .gb-type-sub {
+  margin-top: 12px;
+  color: var(--gb-sub);
+  font-size: 18px;
+}
+[data-gubi-detail] .gb-detail-alerts:empty {
+  display: none;
+}
+[data-gubi-detail] .gb-detail-alerts {
+  margin-top: 24px;
+}
+[data-gubi-detail] .gb-more {
+  margin-top: 36px;
+  border-top: 1px solid var(--gb-card-hi);
+}
+[data-gubi-detail] .gb-more > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 64px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--gb-text);
+  font-size: 20px;
+  font-weight: 600;
+}
+[data-gubi-detail] .gb-more > summary::-webkit-details-marker {
+  display: none;
+}
+[data-gubi-detail] .gb-more > summary span {
+  color: var(--gb-sub);
+  font-size: 17px;
+  font-weight: 400;
+}
+[data-gubi-detail] .gb-more-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-bottom: 24px;
+}
+:is([data-gubi-detail], [data-vehicle-touch]) .gb-detail-panel > button.gb-cta,
+[data-gubi-detail] .gb-detail-panel > button.gb-cta {
+  flex-shrink: 0;
+  min-height: 88px;
+  margin-top: 20px;
+  padding: 0 24px;
+  border-radius: 22px;
+  background: var(--gb-yellow);
+  color: var(--gb-ink);
+  font-size: 24px;
+  font-weight: 800;
+}
+
+@media (max-width: 899px), (orientation: portrait) {
+  [data-gubi-detail] {
+    display: block;
+    overflow-y: auto;
+  }
+  [data-gubi-detail] .gb-detail-map {
+    height: 56vh;
+  }
+  [data-gubi-detail] .gb-detail-panel {
+    padding: 0 20px 24px;
+  }
+  [data-gubi-detail] .gb-panel-scroll {
+    overflow: visible;
+    padding-top: 24px;
+  }
+}
+
+/* ---- 굽이 새 디자인 (3단계: 주행 화면 — 왼쪽 지도, 오른쪽 정보 칸) ----
+   주행 중이라 움직임 효과(전환·애니메이션)는 하나도 쓰지 않는다.
+   다음 회전·속도·남은 거리·도착은 늘 보이고, 단추는 64px 이상. */
+:root {
+  --drv-w: 440px;
+}
+.drv {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--drv-w);
+  background: var(--gb-bg);
+  color: var(--gb-text);
+}
+.drv *,
+.drv-done * {
+  transition: none !important;
+  animation: none !important;
+}
+.drv-map {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+.drv-panel {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 14px;
+  overflow: hidden;
+  padding: 20px 20px 20px;
+  background: var(--gb-bg);
+}
+.drv-big {
+  font-size: 44px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.drv-big small {
+  margin: 0 2px;
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--gb-sub);
+}
+.drv-big small.drv-ap {
+  margin: 0 6px 0 0;
+}
+.drv-big.is-danger {
+  color: #ff5a5f;
+}
+.drv-big.is-off {
+  color: var(--gb-sub);
+}
+
+/* 다음 회전 — 방향 그림과 거리를 가장 크게 */
+.drv-turn {
+  display: flex;
+  min-height: 120px;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 18px;
+  padding: 18px 20px;
+  border-radius: 22px;
+  background: var(--gb-card);
+}
+.drv-turn.is-ok {
+  background: #163a28;
+}
+.drv-turn.is-warn {
+  background: #3d2f12;
+}
+.drv-turn-icon {
+  width: 72px;
+  height: 72px;
+  flex-shrink: 0;
+  color: var(--gb-yellow);
+}
+.drv .drv-turn-dist {
+  font-size: 60px;
+}
+.drv .drv-turn-dist small {
+  font-size: 24px;
+}
+.drv-turn-sub {
+  margin-top: 8px;
+  overflow: hidden;
+  color: var(--gb-text);
+  font-size: 21px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.drv-turn-msg {
+  font-size: 28px;
+  font-weight: 800;
+}
+.drv .drv-speed {
+  font-size: 84px;
+}
+.drv .drv-speed small {
+  font-size: 24px;
+}
+.drv-status {
+  overflow: hidden;
+  color: var(--gb-sub);
+  font-size: 19px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 단속 — 제한속도 표지(흰 원, 빨간 테) */
+.drv-cam {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  color: #ff5a5f;
+  font-size: 17px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.drv-limit {
+  display: inline-flex;
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 5px solid #e8323c;
+  border-radius: 50%;
+  background: #fff;
+  color: #101113;
+  font-size: 22px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+.drv-limit.is-big {
+  width: 80px;
+  height: 80px;
+  border-width: 7px;
+  font-size: 30px;
+}
+
+/* 속도·남은 거리·도착·남은 시간 — 2×2 큰 숫자 */
+.drv-stats {
+  display: grid;
+  flex-shrink: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px 16px;
+  padding: 4px 4px 0;
+}
+.drv-stats.is-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.drv-stats.is-3 .drv-big {
+  font-size: 36px;
+}
+.drv-stats dt {
+  overflow: hidden;
+  color: var(--gb-sub);
+  font-size: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.drv-stats dd {
+  margin-top: 8px;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+}
+
+/* 한 줄 안내 — 핵심은 굵게, 덧붙임은 괄호 */
+.drv-line {
+  display: flex;
+  min-height: 56px;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 0 18px;
+  border-radius: 16px;
+  background: var(--gb-card);
+  color: var(--gb-sub);
+  font-size: 19px;
+  white-space: nowrap;
+}
+.drv-line b {
+  color: var(--gb-text);
+  font-weight: 700;
+}
+.drv-line i {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border-radius: 4px;
+}
+.drv-line.is-danger {
+  background: #3a1518;
+}
+.drv-line.is-danger b {
+  color: #ff8a8e;
+}
+.drv-line.is-warn {
+  color: #f5b700;
+}
+.drv-course {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+.drv-course-sub {
+  padding: 0 4px;
+  color: var(--gb-sub);
+  font-size: 17px;
+}
+/* 코스 진행 막대 — 지나온 만큼 밝게, 특별 구간 색, 지금 위치 노란 표시 */
+.drv-bar {
+  position: relative;
+  height: 12px;
+  flex-shrink: 0;
+  margin: 4px 4px 6px;
+  border-radius: 6px;
+  background: #2a2c31;
+}
+.drv-bar > span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+.drv-bar-done {
+  left: 0;
+  border-radius: 6px;
+  background: #4a4d55;
+}
+.drv-bar-seg {
+  border-radius: 3px;
+}
+.drv-bar-me {
+  top: -5px !important;
+  bottom: -5px !important;
+  width: 6px;
+  margin-left: -3px;
+  border-radius: 3px;
+  background: var(--gb-yellow);
+}
+.drv-dwell {
+  flex-shrink: 0;
+  font-size: 17px;
+}
+.drv-gps {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 12px;
+  color: #f5b700;
+  font-size: 17px;
+}
+
+/* 큰 단추 — 아래에 모은다 */
+.drv-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 6px;
+}
+.drv-row {
+  display: flex;
+  gap: 10px;
+}
+:is(.drv, .drv-done, [data-vehicle-touch]) button.drv-btn {
+  display: inline-flex;
+  min-height: 64px;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-radius: 18px;
+  background: var(--gb-card-hi);
+  color: var(--gb-text);
+  font-size: 19px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+:is(.drv, [data-vehicle-touch]) button.drv-btn.drv-btn-main {
+  min-height: 76px;
+  font-size: 22px;
+}
+:is(.drv, [data-vehicle-touch]) button.drv-btn.is-resume {
+  background: var(--gb-yellow);
+  color: var(--gb-ink);
+}
+:is(.drv, [data-vehicle-touch]) button.drv-btn.is-stop {
+  background: #b3262e;
+  color: #fff;
+}
+:is(.drv, [data-vehicle-touch]) button.drv-btn.is-armed {
+  background: #f5b700;
+  color: var(--gb-ink);
+}
+:is(.drv, [data-vehicle-touch]) button.drv-btn[aria-pressed="false"] {
+  color: var(--gb-sub);
+}
+/* 현대 단속·도착 카드도 칸 안에서 같은 모양 */
+.drv-panel > section {
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 16px;
+  background: var(--gb-card);
+}
+
+/* 지도 위 북쪽 표시 */
+.gb-map-north {
+  display: flex;
+  height: 48px;
+  align-items: center;
+  padding: 0 14px;
+  border-radius: 14px;
+  background: #fff;
+  color: #101113;
+  font-size: 16px;
+  font-weight: 800;
+  box-shadow: 0 2px 10px #0003;
+}
+
+/* 넓은 화면: 알림·재탐색·G 패널은 지도 쪽에 — 오른쪽 정보 칸을 가리지 않는다 */
+@media (min-width: 900px) and (orientation: landscape) {
+  .drv-toast {
+    right: calc(var(--drv-w) + 16px) !important;
+    bottom: 24px !important;
+  }
+  .drv-pop {
+    right: var(--drv-w) !important;
+  }
+  body:has([data-drv]) [data-g-panel] {
+    right: var(--drv-w);
+  }
+}
+
+/* 주행 완료 — 상세 화면처럼 왼쪽 지도, 오른쪽 큰 숫자와 노란 단추 */
+.drv-done {
+  display: grid;
+  grid-template-columns: minmax(0, 57.5%) minmax(0, 1fr);
+  background: var(--gb-bg);
+  color: var(--gb-text);
+}
+.drv-done-map {
+  min-width: 0;
+  min-height: 0;
+}
+.drv-done-map > div,
+.drv-done-map > div > div:first-child {
+  height: 100%;
+  border-radius: 0;
+}
+.drv-done-panel {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  padding: 0 36px 32px;
+}
+.drv-done-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 40px;
+}
+.drv-done-title {
+  font-size: 36px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.drv-done-sub {
+  margin-top: 10px;
+  color: var(--gb-sub);
+  font-size: 20px;
+}
+.drv-done-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 32px 24px;
+  margin-top: 40px;
+}
+.drv-done-stats dt {
+  color: var(--gb-sub);
+  font-size: 19px;
+}
+.drv-done-stats dd {
+  margin-top: 10px;
+}
+.drv-done .drv-big {
+  font-size: 52px;
+}
+.drv-done .drv-big small {
+  font-size: 20px;
+}
+.drv-done-plan {
+  margin-top: 36px;
+  padding-top: 24px;
+  border-top: 1px solid var(--gb-card-hi);
+  color: var(--gb-sub);
+  font-size: 19px;
+  line-height: 1.7;
+}
+.drv-done-plan b {
+  color: var(--gb-text);
+  font-weight: 600;
+}
+.drv-done-plan em {
+  font-style: normal;
+}
+.drv-done-plan-name {
+  margin-bottom: 6px;
+  color: var(--gb-text);
+  font-size: 21px;
+  font-weight: 700;
+}
+.drv-done-note {
+  margin-top: 24px;
+  color: var(--gb-sub);
+  font-size: 18px;
+}
+.drv-done-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 20px;
+}
+:is(.drv-done, [data-vehicle-touch]) button.drv-cta {
+  min-height: 88px;
+  flex: 2;
+  border-radius: 22px;
+  background: var(--gb-yellow);
+  color: var(--gb-ink);
+  font-size: 24px;
+  font-weight: 800;
+}
+:is(.drv-done, [data-vehicle-touch]) .drv-done-actions button.drv-btn {
+  min-height: 88px;
+  border-radius: 22px;
+  font-size: 20px;
+}
+
+/* 좁은 화면·세로: 지도 위, 정보 칸 아래 */
+@media (max-width: 899px), (orientation: portrait) {
+  .drv,
+  .drv-done {
+    display: flex;
+    flex-direction: column;
+  }
+  .drv-map {
+    flex: 1;
+    min-height: 40vh;
+  }
+  .drv-panel {
+    flex: none;
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+  .drv-done {
+    overflow-y: auto;
+  }
+  .drv-done-map {
+    height: 40vh;
+    flex: none;
+  }
+  .drv-done-panel {
+    padding: 0 20px 24px;
+  }
 }

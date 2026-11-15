@@ -242,6 +242,11 @@ export function riversideQuality(s: WindingSegment): number {
   );
 }
 
+/** 와인딩 재고 원본 — 코스 위 굽잇길 구간 색칠(경로 근접 질의)용 */
+export function allWindingSegments(): WindingSegment[] {
+  return loadSegments();
+}
+
 /** 강변길 재고 원본 — 포토스팟 등 경로 근접 질의용 */
 export function allRiversideSegments(): WindingSegment[] {
   return loadRiverside();

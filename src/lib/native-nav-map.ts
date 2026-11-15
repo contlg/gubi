@@ -25,8 +25,9 @@ export function kakaoZoom(kmh: number, nudge = 0): number {
     - Math.min(Math.max(v - 110, 0), 190) / 190 * 1.5 + nudge)));
 }
 
-const trafficColors: Record<number, string> = { 1: "#ef4444", 2: "#f97316", 3: "#eab308", 4: "#22c55e" };
-export function nativeMapRouteData(props: Pick<NavMapProps, "path" | "traffic">) {
+// 굽이 교통 4색(코스 상세와 같음): 정체·지체·서행·원활
+const trafficColors: Record<number, string> = { 1: "#E8323C", 2: "#FF7A1A", 3: "#F5B700", 4: "#1DB954" };
+export function nativeMapRouteData(props: Pick<NavMapProps, "path" | "traffic" | "special">) {
   const states = matchTrafficStates(props.path, props.traffic);
   const cumulative = [0];
   for (let i = 1; i < props.path.length; i++) {
@@ -35,7 +36,14 @@ export function nativeMapRouteData(props: Pick<NavMapProps, "path" | "traffic">)
       (b.lng - a.lng) * 111320 * Math.cos(b.lat * Math.PI / 180)));
   }
   return {
-    path: props.path, colors: props.path.slice(1).map((_, i) => trafficColors[states?.[i] ?? 0] ?? "#38bdf8"),
+    path: props.path, colors: props.path.slice(1).map((_, i) => {
+      // 코스 특별 구간은 상세 화면처럼 교통색 위에 덧칠한다.
+      const mid = (cumulative[i] + cumulative[i + 1]) / 2;
+      // 겹치면 뒤의 구간(더 중요한 종류)이 이긴다 — 웹 지도에서 위에 그려지는 순서와 같다.
+      let special: string | undefined;
+      for (const seg of props.special ?? []) if (mid >= seg.from && mid < seg.to) special = seg.color;
+      return special ?? trafficColors[states?.[i] ?? 0] ?? "#38bdf8";
+    }),
     cumulative: props.path.length ? cumulative : [],
   };
 }

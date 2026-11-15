@@ -12,7 +12,7 @@ export function buildReason(c: RouteCandidate): string | null {
     const names = c.highlights
       .slice(0, 2)
       .map((h) => h.name)
-      .join("·");
+      .join(", ");
     hook =
       c.highlights.length > 2
         ? `${names} 등 주행 구간 ${c.highlights.length}곳`

@@ -4,9 +4,11 @@
 import { useEffect, useRef, useState } from "react";
 import { loadKakaoSdk } from "@/lib/kakao-sdk";
 import { matchTrafficStates } from "@/lib/traffic-match";
+import { cutRanges } from "@/lib/special-segments";
 import type { NavMapProps } from "./NavMap";
 
-const COLORS: Record<number, string> = { 1: "#ef4444", 2: "#f97316", 3: "#eab308", 4: "#22c55e" };
+// 굽이 교통 4색(코스 상세와 같음): 정체·지체·서행·원활
+const COLORS: Record<number, string> = { 1: "#E8323C", 2: "#FF7A1A", 3: "#F5B700", 4: "#1DB954" };
 
 /** Official Kakao web map for browsers and x86 emulators. Map stays north-up;
  * the vehicle marker follows its actual bearing. ARM uses the native Kakao map. */
@@ -40,7 +42,7 @@ export default function NavMapKakao(props: NavMapProps) {
       const element = document.createElement("div");
       element.setAttribute("aria-label", "차량 진행 방향");
       element.dataset.vehicleBearing = "0";
-      element.style.cssText = "width:44px;height:52px;transform-origin:50% 50%;transition:transform .3s linear;filter:drop-shadow(0 2px 4px #0006);pointer-events:none";
+      element.style.cssText = "width:44px;height:52px;transform-origin:50% 50%;filter:drop-shadow(0 2px 4px #0006);pointer-events:none";
       element.innerHTML = '<svg width="44" height="52" viewBox="0 0 44 52" aria-hidden="true"><path d="M22 3 L40 45 L22 36 L4 45 Z" fill="#1677ff" stroke="white" stroke-width="3" stroke-linejoin="round"/></svg>';
       arrow.current = element;
       marker.current = new k.CustomOverlay({ map: instance, position: new k.LatLng(p.lat, p.lng), content: element, xAnchor: .5, yAnchor: .5, zIndex: 20 });
@@ -114,8 +116,13 @@ export default function NavMapKakao(props: NavMapProps) {
         start = i;
       }
     }
+    // 코스 특별 구간(와인딩·해안·강변)은 교통색 위에 덧칠한다 — 코스 상세와 같은 색
+    for (const color of new Set((props.special ?? []).map((seg) => seg.color))) {
+      const ranges = (props.special ?? []).filter((seg) => seg.color === color).map((seg): [number, number] => [seg.from, seg.to]);
+      for (const piece of cutRanges(props.path, ranges)) add(piece.path, color, 8);
+    }
     if (props.compare?.route) add(props.compare.route, "#a855f7", 3);
-  }, [ready, props.path, props.traffic, props.compare?.route]);
+  }, [ready, props.path, props.traffic, props.special, props.compare?.route]);
 
   useEffect(() => {
     if (!ready || !trace.current) return;
@@ -142,19 +149,21 @@ export default function NavMapKakao(props: NavMapProps) {
     });
   }, [ready, props.cams]);
 
-  const button = "min-h-11 min-w-11 rounded-lg border border-line bg-panel px-3 text-sm font-bold text-primary shadow-sm";
+  const button = "gb-map-btn";
   return <div className={`fundrive-kakao-driving isolate relative h-full w-full overflow-hidden bg-panel`} data-map-provider="kakao">
     <div ref={root} className="absolute inset-0" />
     <div data-over-map className="absolute right-3 z-10 flex gap-2" style={{ top: (props.insetTop ?? 0) + 12 }}>
-      <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-panel text-sm font-bold text-secondary" aria-label="북쪽 고정 지도">N ↑</span>
+      <span className="gb-map-north" aria-label="북쪽 고정 지도">N ↑</span>
     </div>
-    <div data-over-map className="absolute right-3 z-10 flex flex-col gap-2" style={{ bottom: (props.insetBottom ?? 0) + 24 }}>
-      <button type="button" aria-label="확대" className={button} onClick={() => { if (map.current) map.current.setLevel(Math.max(1, map.current.getLevel() - 1)); }}>＋</button>
-      <button type="button" aria-label="축소" className={button} onClick={() => { if (map.current) map.current.setLevel(Math.min(12, map.current.getLevel() + 1)); }}>−</button>
+    <div data-over-map className="absolute right-3 z-10 flex flex-col items-end gap-3" style={{ bottom: (props.insetBottom ?? 0) + 24 }}>
       {!follow && <button type="button" className={button} onClick={() => {
         following.current = true; setFollow(true);
         if (props.pos && map.current) map.current.setCenter(new window.kakao.maps.LatLng(props.pos.lat, props.pos.lng));
       }}>현위치</button>}
+      <div className="gb-map-zoom flex flex-col">
+        <button type="button" aria-label="확대" onClick={() => { if (map.current) map.current.setLevel(Math.max(1, map.current.getLevel() - 1)); }}>＋</button>
+        <button type="button" aria-label="축소" onClick={() => { if (map.current) map.current.setLevel(Math.min(12, map.current.getLevel() + 1)); }}>−</button>
+      </div>
     </div>
     {(!ready || error) && <div className="absolute inset-0 flex items-center justify-center bg-panel text-sm text-secondary">
       {error ? <div className="space-y-3 text-center"><p>{error}</p><button type="button" className={button} onClick={() => { setError(""); setRetry(n => n + 1); }}>다시 시도</button></div> : "카카오 지도 불러오는 중…"}
