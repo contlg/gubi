@@ -16,7 +16,7 @@
 
 | 항목 | 내용 |
 |---|---|
-| APK 파일 | [`apk/GUBI_굽이_release.apk`](apk/GUBI_굽이_release.apk) |
+| APK 파일 | [`apk/소풍나온수송대대_굽이_release.apk`](apk/소풍나온수송대대_굽이_release.apk) |
 | 빌드 종류 | `prod` (release 용도, `debuggable false`) |
 | 패키지 이름 | `dev.homesev.drivelog.pleos` |
 | 버전 | 1.9.1 (versionCode 11) |
@@ -38,7 +38,7 @@
 1. Android SDK의 AVD Manager에서 Pleos Connect v2.1.0 시스템 이미지로 에뮬레이터를 만들고 실행합니다.
 2. APK를 설치합니다.
    ```bash
-   adb install -r apk/GUBI_굽이_release.apk
+   adb install -r apk/소풍나온수송대대_굽이_release.apk
    ```
 3. 앱 목록에서 **Gubi**를 실행하고, 위치 권한을 허용합니다.
 4. 순환형/목적지형을 고르고 시간·길 종류를 선택한 뒤 **코스 추천** → 코스 선택 → **이 코스로 주행**을 누르면 순정 내비게이션 안내가 시작됩니다.
