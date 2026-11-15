@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Gubi 안드로이드 껍데기 — UI는 WebView(drivelog.homesev.duckdns.org,
+     서버 고치면 즉시 반영), GPS 기록은 네이티브 포그라운드 서비스가 담당해
+     화면 꺼짐·백그라운드에서도 돌고 알림창에 속도/일시중지/종료가 뜬다.
+     빌드: scripts/build-apk.sh (Gradle) -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    android:versionCode="11"
+    android:versionName="1.9.1">
+
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+  <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+  <!-- 현대 Pleos 빌드: 순정 내비 연동 모듈을 찾아 실행 (Android 11+ 패키지 공개 범위) -->
+  <uses-permission android:name="pleos.car.permission.NAVI_ROUTE" />
+  <uses-permission android:name="pleos.car.permission.NAVI_ROUTE_SEARCH" />
+  <uses-permission android:name="pleos.car.permission.FUSED_LOCATION" />
+  <uses-permission android:name="android.car.permission.CAR_SPEED" />
+  <uses-permission android:name="pleos.car.permission.CAR_SPEED" />
+  <!-- 내비게이션·기록에 필요한 차량 값만 요청한다: 속도, 배터리(SOC·용량, 도착 배터리 추정),
+       기어·주행거리·크루즈·조향·브레이크(차량 상태 표시·기록). 문·창문·공조·온도·타이어·차대번호는 읽지 않는다. -->
+  <uses-permission android:name="pleos.car.permission.CAR_ENERGY" />
+  <uses-permission android:name="pleos.car.permission.CAR_INFO" />
+  <uses-permission android:name="pleos.car.permission.CAR_DRIVE" />
+  <!-- 차 시스템 내비 안내 주인 자리(CarAppFocusManager, APP_FOCUS_TYPE_NAVIGATION) 요청용.
+       일반 앱에는 승인되지 않을 수 있으며, 거부돼도 앱은 안내를 막지 않고 진단 로그만 남긴다. -->
+  <uses-permission android:name="android.car.permission.CAR_NAVIGATION_MANAGER" />
+  <queries>
+    <package android:name="ai.umos.maps.android.navigation.app" />
+  </queries>
+  <application
+      android:label="Gubi"
+      android:icon="@drawable/ic_launcher"
+      android:theme="@android:style/Theme.Material.NoActionBar">
+
+    <uses-library android:name="android.car" android:required="false" />
+    <activity
+        android:name=".MainActivity"
+        android:exported="true"
+        android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
+        android:launchMode="singleTask">
+      <meta-data android:name="distractionOptimized" android:value="true" />
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+      <!-- Pleos 정책: 지도·내비 앱 카테고리 선언(내비컨테이너·심사에 쓰임) -->
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.APP_MAPS" />
+      </intent-filter>
+      <!-- 소셜 로그인 복귀 — 외부 브라우저 로그인이 drivelog://auth?code=… 로 돌려보낸다 -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <data android:scheme="drivelog" android:host="auth" />
+      </intent-filter>
+    </activity>
+    <!-- 현대 내비 안내를 끈 뒤 이 앱으로 되돌아오기 위한 보이지 않는 화면 -->
+    <activity
+        android:name=".ReturnGraceActivity"
+        android:exported="false"
+        android:excludeFromRecents="true"
+        android:noHistory="true"
+        android:theme="@android:style/Theme.Translucent.NoTitleBar">
+      <meta-data android:name="distractionOptimized" android:value="true" />
+    </activity>
+
+    <receiver android:name=".StopRecordingReceiver" android:exported="false" />
+    <service
+        android:name=".TrackService"
+        android:exported="false"
+        android:foregroundServiceType="location" />
+  </application>
+</manifest>

@@ -1,0 +1,93 @@
+plugins { id 'com.android.application' version '8.8.2' }
+
+// The local key never enters source control or build output logs.
+def nativeKey = ''
+def localEnv = file('../.env.local')
+if (localEnv.exists()) {
+    localEnv.eachLine { line ->
+        def match = line =~ /^\s*(?:export\s+)?KAKAO_NATIVE_APP_KEY\s*=\s*(.*?)\s*$/
+        if (match.matches()) {
+            nativeKey = match.group(1)
+            if ((nativeKey.startsWith('"') && nativeKey.endsWith('"')) || (nativeKey.startsWith("'") && nativeKey.endsWith("'"))) {
+                nativeKey = nativeKey.substring(1, nativeKey.length() - 1)
+            } else { nativeKey = nativeKey.replaceFirst(/\s+#.*$/, '').trim() }
+        }
+    }
+}
+def windowsEmulator = providers.gradleProperty('windowsEmulator').orElse('false').get().toBoolean()
+def testPort = providers.gradleProperty('testPort').orElse('1016').get()
+// 빌려쓰기 모드: 화면은 Firebase(UI_ORIGIN)에서 받아 drivelog 주소 아래 /gubi 로 보여 주고,
+// 그 밖의 요청(/api 등)은 drivelog 서버로 그대로 간다. 시험 빌드는 -PborrowUi=true 일 때만 켠다.
+def borrowUi = providers.gradleProperty('borrowUi').orElse('false').get().toBoolean()
+def borrowWebUrl = 'https://drivelog.homesev.duckdns.org/gubi/log'
+if (!(testPort ==~ /[0-9]{1,5}/) || testPort.toInteger() < 1 || testPort.toInteger() > 65535) {
+    throw new GradleException('testPort must be between 1 and 65535')
+}
+android {
+    namespace 'dev.homesev.drivelog'
+    compileSdk 34
+    useLibrary 'android.car'
+    defaultConfig {
+        applicationId 'dev.homesev.drivelog.pleos'
+        minSdk 28
+        buildConfigField 'boolean', 'NATIVE_MAP_ENABLED', (!windowsEmulator).toString()
+        buildConfigField 'boolean', 'EMULATOR_GNSS_REPLAY', 'false'
+        targetSdk 34
+        versionCode 11
+        versionName '1.9.1'
+        buildConfigField 'String', 'APK_BUILD_ID', groovy.json.JsonOutput.toJson('hub-phase-a-' + java.time.Instant.now().toString())
+        buildConfigField 'boolean', 'NATIVE_TBT_ENABLED', 'true'
+        buildConfigField 'String', 'KAKAO_NATIVE_APP_KEY', groovy.json.JsonOutput.toJson(nativeKey)
+        buildConfigField 'boolean', 'BORROW_UI', 'false'
+        buildConfigField 'String', 'UI_ORIGIN', '"https://gubi-ty2004107.web.app"'
+        buildConfigField 'String', 'UI_PREFIX', '"/gubi"'
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    buildFeatures { buildConfig true; viewBinding true }
+    applicationVariants.all { variant -> variant.outputs.all { outputFileName = "gubi-${variant.name}.apk" } }
+    signingConfigs {
+        legacyDebug {
+            storeFile file(providers.gradleProperty('debugKeystore').orElse(System.getProperty('user.home') + '/.android/debug.keystore').get())
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+    buildTypes {
+        prod {
+            debuggable false
+            signingConfig signingConfigs.legacyDebug
+            buildConfigField 'String', 'WEB_URL', ('"' + borrowWebUrl + '"')
+            buildConfigField 'boolean', 'BORROW_UI', 'true'
+        }
+        carTest {
+            buildConfigField 'boolean', 'EMULATOR_GNSS_REPLAY', windowsEmulator.toString()
+            // 에뮬레이터 주행 비교(114회 중 109회 같은 회전)로 확인했다. 끄려면 -PnativeTbtEnabled=false.
+            buildConfigField 'boolean', 'NATIVE_TBT_ENABLED', (project.findProperty('nativeTbtEnabled') == 'false' ? 'false' : 'true')
+            debuggable true
+            signingConfig signingConfigs.legacyDebug
+            // -PtestWebUrl=https://... 이면 시험 빌드도 공개 주소를 불러온다(카카오 지도 도메인 등록 주소).
+            buildConfigField 'boolean', 'BORROW_UI', borrowUi.toString()
+            buildConfigField 'String', 'WEB_URL', borrowUi ? ('"' + borrowWebUrl + '"') : providers.gradleProperty('testWebUrl').isPresent() ? ('"' + providers.gradleProperty('testWebUrl').get() + '"') : ('"http://' + (windowsEmulator ? 'localhost' : '10.0.2.2') + ':' + testPort + '/log"')
+        }
+    }
+    if (windowsEmulator) {
+        // Kakao provides ARM binaries only. Use the existing web map on x86 emulators.
+        packaging { jniLibs { excludes += ['**/libK3fAndroid.so'] } }
+    }
+    // Keep all original shell source/resource paths; debug/release are not distributable variants.
+    variantFilter { variant -> if (variant.buildType.name in ['debug', 'release']) variant.ignore = true }
+    sourceSets {
+        main { manifest.srcFile 'AndroidManifest.xml'; java.srcDirs = ['java']; res.srcDirs = ['res']; assets.srcDirs = ['assets'] }
+        carTest { manifest.srcFile 'test/AndroidManifest.xml'; java.srcDirs = ['test-java']; res.srcDirs = ['test-res'] }
+    }
+}
+dependencies {
+    carTestImplementation 'com.kakaomobility.knsdk:knsdk_ui:1.12.8-hotfix05'
+    carTestImplementation 'androidx.appcompat:appcompat:1.6.1'
+    carTestImplementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    implementation 'com.kakao.maps.open:android:2.15.2'
+    implementation 'ai.pleos.playground:NaviHelper:3.0.5'
+    implementation 'ai.pleos.playground:Vehicle:2.3.2'
+    implementation 'ai.pleos.playground:FusedLocation:1.1.3'
+}

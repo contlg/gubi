@@ -1,0 +1,27 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "rootDir": "./src",
+    "noEmit": false,
+    "incremental": false,
+    "allowJs": false,
+    "allowImportingTsExtensions": false,
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": [
+    "src/lib/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "src/lib/**/*.test.ts",
+    "src/lib/car-auth.ts",
+    "src/lib/guided-start.ts",
+    "src/lib/native-nav-map.ts",
+    "src/lib/recording-ack.ts",
+    "src/lib/native-turn.ts",
+    "src/lib/pleos-feed.ts"
+  ]
+}

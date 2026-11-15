@@ -1,0 +1,119 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/.next-stage/
+/.next-perf/
+/.next-old*/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# 대용량 로컬 데이터 — scripts/build-*.mjs 로 재생성 (OSM PBF, DEM, 도로 그래프)
+/data-osm/
+/src/lib/data/dem/
+/src/lib/data/roadgraph/
+/src/lib/data/nodelink/
+/src/lib/data/local-places.json
+
+# 로그인 유저별 주행 기록 버킷 (런타임 개인 데이터)
+/data/records/
+/data/rawlog/
+
+# 🔒 비밀·개인정보 — git/배포에 절대 포함 금지 (서명키·자격증명·위치이력)
+/android/*.keystore
+/data/auth-users.json
+/data/auth-sessions.json
+/data/drive-records.json
+/data/drive-records.json.retired
+/data/drive-plan.json
+/data/time-calibration.jsonl
+/data/*.log
+/data/sessions.json
+/data/plans/
+/data/drive-plans/
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+!.env.example
+android/build/
+data/cache/
+data/records/*.bak
+data/records/*.tmp
+data/region-cache.json
+data/next-start.log
+/data/its-traffic.json
+/data/speedcams.json
+/src/lib/data/admdong/
+
+# 생성물·대용량 — 소스가 아니라 빌드/분석 산출물
+/.next-prev/
+/artifacts/
+/reports/
+/ux-research/
+/data/ux-audit/
+/data/next-start.log.mark
+# 사용자 인증 토큰↔계정 매핑 — 절대 커밋 금지(민감)
+/data/auth-links.json
+# 리버스엔지니어링 실험 스크립트(개인 작업)
+/scripts/kakao-frida/
+# 레포 루트에 임시로 둔 비교 테스트용 앱 파일. public/의 배포용 apk는 계속 추적한다.
+/*.apk
+/*.xapk
+
+# 에뮬 비교용 글자인식 도구 (빌드 산출물)
+scripts/emu/ocr
+
+/data/speedcams.last-good.json
+/data-raw/offline-geo/
+/.next-prev-*/
+/data/kakao-cams.json
+/artifacts/
+/data/tmap-cams.json
+
+# 에뮬용 가짜 GPS 앱 빌드 산출물·파이썬 캐시
+scripts/emu/mockgps/build/
+__pycache__/
+
+# drivelog-sync
+/data/
+/node_modules/
+/.next*/
+*.apk
+__pycache__/
+*.tsbuildinfo
+
+# 웹 내려받기용 APK (제출본은 apk/ 폴더)
+/public/gubi-pleos.apk
+!/apk/*.apk
