@@ -39,7 +39,7 @@ android {
         buildConfigField 'boolean', 'NATIVE_TBT_ENABLED', 'true'
         buildConfigField 'String', 'KAKAO_NATIVE_APP_KEY', groovy.json.JsonOutput.toJson(nativeKey)
         buildConfigField 'boolean', 'BORROW_UI', 'false'
-        buildConfigField 'String', 'UI_ORIGIN', '"https://gubi-ty2004107.web.app"'
+        buildConfigField 'String', 'UI_ORIGIN', '"https://gubi-drive.web.app"'
         buildConfigField 'String', 'UI_PREFIX', '"/gubi"'
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
